@@ -19,6 +19,7 @@ from app.db.models.user import User
 from app.db.models.user_settings import UserSettings
 from app.schemas.auth import (
     ForgotPasswordRequest,
+    ResendVerificationRequest,
     ResetPasswordRequest,
     Token,
     UserCreate,
@@ -60,18 +61,18 @@ async def _create_default_settings(db: AsyncSession, user_id: int) -> None:
 async def _send_verification_email(user: User) -> None:
     verification_link = f"{settings.FRONTEND_URL}/verify-email?token={user.email_verification_token}"
     await system_smtp.send_email(
-        to_email=user.email,
+        to=user.email,
         subject="Verify your Project Atlas email",
-        body=f"Verify your email with this link: {verification_link}",
+        body_html=f"<p>Verify your email by visiting <a href=\"{verification_link}\">{verification_link}</a>.</p>",
     )
 
 
 async def _send_password_reset_email(user: User) -> None:
     reset_link = f"{settings.FRONTEND_URL}/reset-password?token={user.password_reset_token}"
     await system_smtp.send_email(
-        to_email=user.email,
+        to=user.email,
         subject="Reset your Project Atlas password",
-        body=f"Reset your password with this link: {reset_link}",
+        body_html=f"<p>Reset your password by visiting <a href=\"{reset_link}\">{reset_link}</a>.</p>",
     )
 
 
@@ -192,9 +193,13 @@ async def verify_email(
 
 @router.post("/resend-verification")
 async def resend_verification(
-    current_user: User = Depends(get_current_active_user),
+    payload: ResendVerificationRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
+    result = await db.execute(select(User).where(User.email == payload.email.lower()))
+    current_user = result.scalar_one_or_none()
+    if current_user is None:
+        return {"status": "verification_resent"}
     if current_user.is_email_verified:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already verified.")
 
