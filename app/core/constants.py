@@ -1,0 +1,2 @@
+JWT_ALGORITHM = "HS256"
+REFRESH_TOKEN_COOKIE_NAME = "refresh_token"

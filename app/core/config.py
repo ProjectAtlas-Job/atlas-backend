@@ -1,0 +1,71 @@
+from functools import lru_cache
+from typing import Any
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    ENVIRONMENT: str = "development"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/atlas"
+    SECRET_KEY: str = "change-me"
+    FERNET_KEY: str = "change-me"
+    REDIS_URL: str = "redis://localhost:6379/0"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+    FRONTEND_URL: str = "http://localhost:3000"
+    LOG_LEVEL: str = "INFO"
+    LOG_DIR: str = "logs"
+    SYSTEM_SMTP_HOST: str = ""
+    SYSTEM_SMTP_PORT: int = 587
+    SYSTEM_SMTP_USER: str = ""
+    SYSTEM_SMTP_PASSWORD: str = ""
+    SYSTEM_FROM_EMAIL: str = "noreply@example.com"
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
+    GITHUB_CLIENT_ID: str = ""
+    GITHUB_CLIENT_SECRET: str = ""
+    GITHUB_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/github/callback"
+
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value: Any) -> list[str]:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("[") and stripped.endswith("]"):
+                return [item.strip().strip("\"'") for item in stripped[1:-1].split(",") if item.strip()]
+            return [item.strip() for item in stripped.split(",") if item.strip()]
+        if isinstance(value, list):
+            return value
+        raise ValueError("BACKEND_CORS_ORIGINS must be a list or comma-separated string.")
+
+    @field_validator("ENVIRONMENT")
+    @classmethod
+    def validate_environment(cls, value: str) -> str:
+        normalized = value.lower()
+        allowed = {"development", "staging", "production", "test"}
+        if normalized not in allowed:
+            raise ValueError(f"ENVIRONMENT must be one of: {', '.join(sorted(allowed))}")
+        return normalized
+
+    @field_validator("BACKEND_CORS_ORIGINS")
+    @classmethod
+    def validate_production_cors(cls, value: list[str], info: Any) -> list[str]:
+        environment = info.data.get("ENVIRONMENT", "development")
+        if environment == "production" and "*" in value:
+            raise ValueError("Wildcard CORS origins are not allowed in production.")
+        return value
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()
