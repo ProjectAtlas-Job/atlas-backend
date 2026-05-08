@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ghcr.io/Madhurya/atlas-backend:latest
+    image: ghcr.io/ProjectAtlas-Job/atlas-backend:latest
     restart: unless-stopped
     env_file: .env
     depends_on: [redis]
@@ -13,7 +13,7 @@ services:
 
   # worker disabled on AWS t2.micro (1 GB RAM) - re-enable on Oracle (24 GB)
   # worker:
-  #   image: ghcr.io/Madhurya/atlas-backend:latest
+  #   image: ghcr.io/ProjectAtlas-Job/atlas-backend:latest
   #   command: python -m app.worker.arq_worker
   #   restart: unless-stopped
   #   env_file: .env
