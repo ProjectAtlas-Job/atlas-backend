@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ghcr.io/ProjectAtlas-Job/atlas-backend:latest
+    image: ghcr.io/projectatlas-job/atlas-backend:latest
     restart: unless-stopped
     env_file: .env
     depends_on: [redis]
