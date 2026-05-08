@@ -1,0 +1,39 @@
+services:
+  backend:
+    image: ghcr.io/Madhurya/atlas-backend:latest
+    restart: unless-stopped
+    env_file: .env
+    depends_on: [redis]
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # worker disabled on AWS t2.micro (1 GB RAM) - re-enable on Oracle (24 GB)
+  # worker:
+  #   image: ghcr.io/Madhurya/atlas-backend:latest
+  #   command: python -m app.worker.arq_worker
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   depends_on: [redis]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes: [redis_data:/data]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    depends_on: [backend]
+
+volumes:
+  redis_data: {}
+  caddy_data: {}

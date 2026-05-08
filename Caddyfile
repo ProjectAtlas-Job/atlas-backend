@@ -1,0 +1,9 @@
+ec2-52-201-249-169.compute-1.amazonaws.com {
+    reverse_proxy backend:8000
+    encode gzip
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Frame-Options DENY
+        X-Content-Type-Options nosniff
+    }
+}
