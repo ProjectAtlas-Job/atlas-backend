@@ -34,16 +34,9 @@ def _mask_email(email: str) -> str:
 
 
 class MailService:
-    def __init__(self) -> None:
-        self._verified = False
-
     @property
     def enabled(self) -> bool:
         return settings.email_enabled
-
-    @property
-    def verified(self) -> bool:
-        return self._verified
 
     async def verify_connection(self) -> bool:
         if not self.enabled:
@@ -54,7 +47,6 @@ class MailService:
         # account. Generate the 16-character password from:
         # Google Account -> Security -> 2-Step Verification -> App Passwords.
         await asyncio.to_thread(self._verify_connection_sync)
-        self._verified = True
         logger.info("SMTP connection verified for {}", settings.SMTP_HOST)
         if settings.SMTP_FROM.lower() != settings.SMTP_USER.lower():
             logger.warning(

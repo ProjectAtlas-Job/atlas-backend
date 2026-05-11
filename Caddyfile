@@ -1,3 +1,7 @@
+{
+    auto_https off
+}
+
 # AWS public hostnames are not a reliable target for ACME certificates.
 # Serve HTTP on the temporary EC2 hostname, then switch back to a real domain for HTTPS.
 http://ec2-52-201-249-169.compute-1.amazonaws.com {

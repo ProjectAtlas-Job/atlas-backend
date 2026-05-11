@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,11 +22,11 @@ class Settings(BaseSettings):
     # Gmail SMTP uses STARTTLS on port 587, so secure remains false until the
     # server upgrades the connection. Google requires 2FA to be enabled and a
     # dedicated App Password for SMTP access. Do not use a regular Gmail password.
-    SMTP_HOST: str = Field(default="", validation_alias="SMTP_HOST")
-    SMTP_PORT: int = Field(default=587, validation_alias="SMTP_PORT")
-    SMTP_USER: str = Field(default="", validation_alias="SMTP_USER")
-    SMTP_PASS: str = Field(default="", validation_alias="SMTP_PASS")
-    SMTP_FROM: str = Field(default="", validation_alias="SMTP_FROM")
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASS: str = ""
+    SMTP_FROM: str = ""
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
