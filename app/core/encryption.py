@@ -13,7 +13,7 @@ SENSITIVE_FIELDS: frozenset[str] = frozenset(
 
 
 def _get_fernet() -> Fernet:
-    return Fernet(settings.FERNET_KEY.encode())
+    return Fernet(settings.ENCRYPTION_KEY.encode())
 
 
 def encrypt(value: str) -> str:

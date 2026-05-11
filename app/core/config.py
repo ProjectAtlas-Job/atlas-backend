@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Any
 
-from pydantic import field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,7 +11,10 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/atlas"
     SECRET_KEY: str = "change-me"
-    FERNET_KEY: str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    ENCRYPTION_KEY: str = Field(
+        default="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+        validation_alias=AliasChoices("ENCRYPTION_KEY", "FERNET_KEY"),
+    )
     REDIS_URL: str = "redis://localhost:6379/0"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
@@ -23,11 +26,14 @@ class Settings(BaseSettings):
     # Gmail SMTP uses STARTTLS on port 587, so secure remains false until the
     # server upgrades the connection. Google requires 2FA to be enabled and a
     # dedicated App Password for SMTP access. Do not use a regular Gmail password.
-    SMTP_HOST: str = ""
-    SMTP_PORT: int = 587
-    SMTP_USER: str = ""
-    SMTP_PASS: str = ""
-    SMTP_FROM: str = ""
+    SYSTEM_SMTP_HOST: str = Field(default="", validation_alias=AliasChoices("SYSTEM_SMTP_HOST", "SMTP_HOST"))
+    SYSTEM_SMTP_PORT: int = Field(default=587, validation_alias=AliasChoices("SYSTEM_SMTP_PORT", "SMTP_PORT"))
+    SYSTEM_SMTP_USER: str = Field(default="", validation_alias=AliasChoices("SYSTEM_SMTP_USER", "SMTP_USER"))
+    SYSTEM_SMTP_PASSWORD: str = Field(
+        default="",
+        validation_alias=AliasChoices("SYSTEM_SMTP_PASSWORD", "SMTP_PASS"),
+    )
+    SYSTEM_FROM_EMAIL: str = Field(default="", validation_alias=AliasChoices("SYSTEM_FROM_EMAIL", "SMTP_FROM"))
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
@@ -68,10 +74,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_smtp_settings(self) -> "Settings":
-        smtp_values = [self.SMTP_HOST, self.SMTP_USER, self.SMTP_PASS, self.SMTP_FROM]
+        smtp_values = [
+            self.SYSTEM_SMTP_HOST,
+            self.SYSTEM_SMTP_USER,
+            self.SYSTEM_SMTP_PASSWORD,
+            self.SYSTEM_FROM_EMAIL,
+        ]
         populated = [bool(value.strip()) for value in smtp_values]
         if any(populated) and not all(populated):
-            raise ValueError("SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM must be provided together.")
+            raise ValueError(
+                "SYSTEM_SMTP_HOST, SYSTEM_SMTP_USER, SYSTEM_SMTP_PASSWORD, and SYSTEM_FROM_EMAIL must be provided together."
+            )
         return self
 
     @property
@@ -79,12 +92,36 @@ class Settings(BaseSettings):
         return all(
             value.strip()
             for value in (
-                self.SMTP_HOST,
-                self.SMTP_USER,
-                self.SMTP_PASS,
-                self.SMTP_FROM,
+                self.SYSTEM_SMTP_HOST,
+                self.SYSTEM_SMTP_USER,
+                self.SYSTEM_SMTP_PASSWORD,
+                self.SYSTEM_FROM_EMAIL,
             )
         )
+
+    @property
+    def FERNET_KEY(self) -> str:
+        return self.ENCRYPTION_KEY
+
+    @property
+    def SMTP_HOST(self) -> str:
+        return self.SYSTEM_SMTP_HOST
+
+    @property
+    def SMTP_PORT(self) -> int:
+        return self.SYSTEM_SMTP_PORT
+
+    @property
+    def SMTP_USER(self) -> str:
+        return self.SYSTEM_SMTP_USER
+
+    @property
+    def SMTP_PASS(self) -> str:
+        return self.SYSTEM_SMTP_PASSWORD
+
+    @property
+    def SMTP_FROM(self) -> str:
+        return self.SYSTEM_FROM_EMAIL
 
 
 @lru_cache

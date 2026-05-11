@@ -444,7 +444,7 @@ async def contact_support(
     _require_email_service()
 
     await mail_service.send(
-        to_email=settings.SMTP_FROM,
+        to_email=settings.SYSTEM_FROM_EMAIL,
         content=_create_support_email(payload),
         reply_to=payload.email,
     )
