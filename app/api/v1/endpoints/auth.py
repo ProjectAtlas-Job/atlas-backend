@@ -55,6 +55,7 @@ def _set_refresh_cookie(response: Response, refresh_token: str, max_age: int) ->
         httponly=True,
         secure=True,
         samesite="strict",
+        domain=settings.COOKIE_DOMAIN,
         max_age=max_age,
     )
 
@@ -268,6 +269,7 @@ async def logout(
         httponly=True,
         secure=True,
         samesite="strict",
+        domain=settings.COOKIE_DOMAIN,
         max_age=0,
     )
     response.status_code = status.HTTP_204_NO_CONTENT

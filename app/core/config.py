@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000"]
     FRONTEND_URL: str = "http://localhost:3000"
+    COOKIE_DOMAIN: str | None = None
     LOG_LEVEL: str = "INFO"
     LOG_DIR: str = "logs"
     # Gmail SMTP uses STARTTLS on port 587, so secure remains false until the
