@@ -43,4 +43,4 @@ jobs:
             docker compose pull
             docker compose up -d
             docker compose exec -T backend alembic upgrade head
-            curl -f http://localhost:8000/health
+            docker compose exec -T backend curl -f http://localhost:8000/health
