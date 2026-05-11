@@ -1,12 +1,22 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
     full_name: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def normalize_full_name(cls, value: str) -> str:
+        return " ".join(value.strip().split())
 
 
 class UserRead(BaseModel):
@@ -48,11 +58,67 @@ class VerifyEmailRequest(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
 
 class ResendVerificationRequest(BaseModel):
     email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+
+class EmailOtpRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class VerifyEmailOtpRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(min_length=6, max_length=6)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("otp", mode="before")
+    @classmethod
+    def normalize_otp(cls, value: str) -> str:
+        return value.strip()
+
+
+class ContactSupportRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    subject: str = Field(min_length=1, max_length=180)
+    message: str = Field(min_length=10, max_length=4000)
+
+    @field_validator("name", "subject", mode="before")
+    @classmethod
+    def normalize_text_fields(cls, value: str) -> str:
+        return " ".join(value.strip().split())
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def normalize_message(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_support_email(cls, value: str) -> str:
+        return value.strip().lower()

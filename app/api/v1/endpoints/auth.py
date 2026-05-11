@@ -1,5 +1,8 @@
 import asyncio
+import secrets
+from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
+from html import escape
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -7,6 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
+from loguru import logger
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,23 +18,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_active_user, get_db
 from app.core.config import settings
 from app.core.constants import REFRESH_TOKEN_COOKIE_NAME
+from app.core.rate_limiter import limiter
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.models.user import User
 from app.db.models.user_settings import UserSettings
 from app.schemas.auth import (
+    ContactSupportRequest,
+    EmailOtpRequest,
     ForgotPasswordRequest,
     ResendVerificationRequest,
     ResetPasswordRequest,
     Token,
     UserCreate,
     UserRead,
+    VerifyEmailOtpRequest,
     VerifyEmailRequest,
 )
-from app.services.email import system_smtp
+from app.services.email.mail_service import mail_service
+from app.services.email.templates import EmailContent, otp_email, password_reset_email, verification_email, welcome_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+
+EMAIL_OTP_TTL_MINUTES = 10
 
 
 def _refresh_token_ttl_seconds() -> int:
@@ -48,6 +59,39 @@ def _set_refresh_cookie(response: Response, refresh_token: str, max_age: int) ->
     )
 
 
+def _require_email_service() -> None:
+    if not settings.email_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email delivery is not configured on the server.",
+        )
+
+
+def _new_email_otp() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def _create_support_email(payload: ContactSupportRequest) -> EmailContent:
+    body_html = (
+        "<p>A new support request was submitted from Project Atlas.</p>"
+        f"<p><strong>Name:</strong> {escape(payload.name)}</p>"
+        f"<p><strong>Email:</strong> {escape(payload.email)}</p>"
+        f"<p><strong>Subject:</strong> {escape(payload.subject)}</p>"
+        f"<p><strong>Message:</strong><br />{escape(payload.message).replace(chr(10), '<br />')}</p>"
+    )
+    return EmailContent(
+        subject=f"Project Atlas support: {payload.subject}",
+        html=body_html,
+        text=(
+            "New Project Atlas support request\n\n"
+            f"Name: {payload.name}\n"
+            f"Email: {payload.email}\n"
+            f"Subject: {payload.subject}\n\n"
+            f"{payload.message}"
+        ),
+    )
+
+
 async def _issue_refresh_token(user_id: int) -> str:
     refresh_token = str(uuid4())
     await redis_client.setex(f"refresh:{refresh_token}", _refresh_token_ttl_seconds(), str(user_id))
@@ -58,22 +102,100 @@ async def _create_default_settings(db: AsyncSession, user_id: int) -> None:
     db.add(UserSettings(user_id=user_id))
 
 
+async def _deliver_email_task(coro: Awaitable[None], *, context: str) -> None:
+    try:
+        await coro
+    except Exception:
+        logger.exception("Background email task failed for {}", context)
+
+
+def _queue_email(coro: Awaitable[None], *, context: str) -> None:
+    asyncio.create_task(_deliver_email_task(coro, context=context))
+
+
 async def _send_verification_email(user: User) -> None:
-    verification_link = f"{settings.FRONTEND_URL}/verify-email?token={user.email_verification_token}"
-    await system_smtp.send_email(
-        to=user.email,
-        subject="Verify your Project Atlas email",
-        body_html=f"<p>Verify your email by visiting <a href=\"{verification_link}\">{verification_link}</a>.</p>",
+    if not user.email_verification_token:
+        return
+    verification_link = f"{settings.FRONTEND_URL}/verify-email?token={user.email_verification_token}&email={user.email}"
+    await mail_service.send(
+        to_email=user.email,
+        content=verification_email(full_name=user.full_name, verification_link=verification_link),
+    )
+
+
+async def _send_email_otp(user: User, otp_code: str) -> None:
+    await mail_service.send(
+        to_email=user.email,
+        content=otp_email(full_name=user.full_name, otp_code=otp_code),
     )
 
 
 async def _send_password_reset_email(user: User) -> None:
+    if not user.password_reset_token:
+        return
     reset_link = f"{settings.FRONTEND_URL}/reset-password?token={user.password_reset_token}"
-    await system_smtp.send_email(
-        to=user.email,
-        subject="Reset your Project Atlas password",
-        body_html=f"<p>Reset your password by visiting <a href=\"{reset_link}\">{reset_link}</a>.</p>",
+    await mail_service.send(
+        to_email=user.email,
+        content=password_reset_email(full_name=user.full_name, reset_link=reset_link),
     )
+
+
+async def _send_welcome_email(user: User) -> None:
+    await mail_service.send(
+        to_email=user.email,
+        content=welcome_email(full_name=user.full_name, dashboard_link=f"{settings.FRONTEND_URL}/dashboard"),
+    )
+
+
+async def _mark_user_verified(db: AsyncSession, user: User) -> bool:
+    if user.is_email_verified:
+        return False
+    user.is_email_verified = True
+    user.email_verification_token = None
+    user.email_otp_code_hash = None
+    user.email_otp_expires = None
+    user.email_otp_sent_at = None
+    await db.commit()
+    return True
+
+
+async def _maybe_send_welcome_email(user: User, *, newly_verified: bool, context: str) -> None:
+    if newly_verified:
+        _queue_email(_send_welcome_email(user), context=context)
+
+
+async def _bootstrap_social_user(
+    *,
+    db: AsyncSession,
+    email: str,
+    full_name: str | None,
+    github_username: str | None = None,
+) -> User:
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        user = User(
+            email=email,
+            full_name=full_name,
+            github_username=github_username,
+            is_email_verified=True,
+        )
+        db.add(user)
+        await db.flush()
+        await _create_default_settings(db, user.id)
+        await db.commit()
+        await db.refresh(user)
+        _queue_email(_send_welcome_email(user), context=f"social-welcome:{user.id}")
+        return user
+
+    user.github_username = github_username or user.github_username
+    if full_name and not user.full_name:
+        user.full_name = full_name
+    user.is_email_verified = True
+    await db.commit()
+    await db.refresh(user)
+    return user
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -81,14 +203,15 @@ async def register(
     payload: UserCreate,
     db: AsyncSession = Depends(get_db),
 ) -> UserRead:
-    email = payload.email.lower()
-    result = await db.execute(select(User).where(User.email == email))
+    _require_email_service()
+
+    result = await db.execute(select(User).where(User.email == payload.email))
     existing_user = result.scalar_one_or_none()
     if existing_user is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered.")
 
     user = User(
-        email=email,
+        email=payload.email,
         hashed_password=hash_password(payload.password),
         full_name=payload.full_name,
         email_verification_token=str(uuid4()),
@@ -99,7 +222,7 @@ async def register(
     await _create_default_settings(db, user.id)
     await db.commit()
     await db.refresh(user)
-    asyncio.create_task(_send_verification_email(user))
+    _queue_email(_send_verification_email(user), context=f"register-verification:{user.id}")
     return UserRead.model_validate(user)
 
 
@@ -109,13 +232,16 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ) -> Token:
-    email = form_data.username.lower()
+    email = form_data.username.strip().lower()
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
     if not user.is_email_verified:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email not verified.")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified. Request a new verification link or OTP to continue.",
+        )
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user.")
     if not user.hashed_password or not verify_password(form_data.password, user.hashed_password):
@@ -185,18 +311,72 @@ async def verify_email(
     if user is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification token.")
 
-    user.is_email_verified = True
-    user.email_verification_token = None
+    newly_verified = await _mark_user_verified(db, user)
+    await _maybe_send_welcome_email(user, newly_verified=newly_verified, context=f"welcome-token:{user.id}")
+    return {"status": "verified"}
+
+
+@router.post("/request-email-otp")
+@limiter.limit("3/minute")
+async def request_email_otp(
+    request: Request,
+    payload: EmailOtpRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    _require_email_service()
+
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
+    if user is None or user.is_email_verified:
+        return {"status": "otp_sent"}
+
+    otp_code = _new_email_otp()
+    user.email_otp_code_hash = hash_password(otp_code)
+    user.email_otp_expires = datetime.now(UTC) + timedelta(minutes=EMAIL_OTP_TTL_MINUTES)
+    user.email_otp_sent_at = datetime.now(UTC)
     await db.commit()
+    await db.refresh(user)
+    _queue_email(_send_email_otp(user, otp_code), context=f"verification-otp:{user.id}")
+    return {"status": "otp_sent"}
+
+
+@router.post("/verify-email-otp")
+@limiter.limit("5/minute")
+async def verify_email_otp(
+    request: Request,
+    payload: VerifyEmailOtpRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
+    if user is None or not user.email_otp_code_hash or not user.email_otp_expires:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification code.")
+
+    if user.email_otp_expires <= datetime.now(UTC):
+        user.email_otp_code_hash = None
+        user.email_otp_expires = None
+        user.email_otp_sent_at = None
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification code.")
+
+    if not verify_password(payload.otp, user.email_otp_code_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification code.")
+
+    newly_verified = await _mark_user_verified(db, user)
+    await _maybe_send_welcome_email(user, newly_verified=newly_verified, context=f"welcome-otp:{user.id}")
     return {"status": "verified"}
 
 
 @router.post("/resend-verification")
+@limiter.limit("3/minute")
 async def resend_verification(
+    request: Request,
     payload: ResendVerificationRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
-    result = await db.execute(select(User).where(User.email == payload.email.lower()))
+    _require_email_service()
+
+    result = await db.execute(select(User).where(User.email == payload.email))
     current_user = result.scalar_one_or_none()
     if current_user is None:
         return {"status": "verification_resent"}
@@ -206,23 +386,27 @@ async def resend_verification(
     current_user.email_verification_token = str(uuid4())
     await db.commit()
     await db.refresh(current_user)
-    asyncio.create_task(_send_verification_email(current_user))
+    _queue_email(_send_verification_email(current_user), context=f"resend-verification:{current_user.id}")
     return {"status": "verification_resent"}
 
 
 @router.post("/forgot-password")
+@limiter.limit("3/minute")
 async def forgot_password(
+    request: Request,
     payload: ForgotPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
-    result = await db.execute(select(User).where(User.email == payload.email.lower()))
+    _require_email_service()
+
+    result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
     if user is not None:
         user.password_reset_token = str(uuid4())
         user.password_reset_expires = datetime.now(UTC) + timedelta(hours=1)
         await db.commit()
         await db.refresh(user)
-        asyncio.create_task(_send_password_reset_email(user))
+        _queue_email(_send_password_reset_email(user), context=f"password-reset:{user.id}")
     return {"status": "ok"}
 
 
@@ -247,6 +431,22 @@ async def reset_password(
     user.password_reset_expires = None
     await db.commit()
     return {"status": "password_reset"}
+
+
+@router.post("/contact-support")
+@limiter.limit("2/minute")
+async def contact_support(
+    request: Request,
+    payload: ContactSupportRequest,
+) -> dict[str, str]:
+    _require_email_service()
+
+    await mail_service.send(
+        to_email=settings.SMTP_FROM,
+        content=_create_support_email(payload),
+        reply_to=payload.email,
+    )
+    return {"status": "sent"}
 
 
 @router.get("/google/connect")
@@ -290,26 +490,11 @@ async def google_callback(
         userinfo_response.raise_for_status()
         userinfo = userinfo_response.json()
 
-    email = userinfo["email"].lower()
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
-
-    if user is None:
-        user = User(
-            email=email,
-            full_name=userinfo.get("name"),
-            is_email_verified=True,
-        )
-        db.add(user)
-        await db.flush()
-        await _create_default_settings(db, user.id)
-        await db.commit()
-    else:
-        user.full_name = user.full_name or userinfo.get("name")
-        user.is_email_verified = True
-        await db.commit()
-
-    await db.refresh(user)
+    user = await _bootstrap_social_user(
+        db=db,
+        email=userinfo["email"].strip().lower(),
+        full_name=userinfo.get("name"),
+    )
     access_token = create_access_token(subject=str(user.id), email=user.email)
     refresh_token = await _issue_refresh_token(user.id)
     redirect = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard?access_token={access_token}")
@@ -372,28 +557,12 @@ async def github_callback(
     if not primary_email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GitHub account has no primary email.")
 
-    email = primary_email.lower()
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
-
-    if user is None:
-        user = User(
-            email=email,
-            full_name=github_user.get("name"),
-            github_username=github_user.get("login"),
-            is_email_verified=True,
-        )
-        db.add(user)
-        await db.flush()
-        await _create_default_settings(db, user.id)
-        await db.commit()
-    else:
-        user.github_username = github_user.get("login")
-        if github_user.get("name") and not user.full_name:
-            user.full_name = github_user.get("name")
-        await db.commit()
-
-    await db.refresh(user)
+    user = await _bootstrap_social_user(
+        db=db,
+        email=primary_email.strip().lower(),
+        full_name=github_user.get("name"),
+        github_username=github_user.get("login"),
+    )
     access_token = create_access_token(subject=str(user.id), email=user.email)
     refresh_token = await _issue_refresh_token(user.id)
     redirect = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard?access_token={access_token}")

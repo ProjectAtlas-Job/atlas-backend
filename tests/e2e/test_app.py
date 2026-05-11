@@ -21,6 +21,9 @@ class AppSmokeTests(unittest.TestCase):
         self.assertIn("/api/v1/auth/register", routes)
         self.assertIn("/api/v1/auth/login", routes)
         self.assertIn("/api/v1/auth/refresh", routes)
+        self.assertIn("/api/v1/auth/request-email-otp", routes)
+        self.assertIn("/api/v1/auth/verify-email-otp", routes)
+        self.assertIn("/api/v1/auth/contact-support", routes)
 
 
 if __name__ == "__main__":

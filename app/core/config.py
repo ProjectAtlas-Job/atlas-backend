@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Any
 
-from pydantic import field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,11 +19,14 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     LOG_LEVEL: str = "INFO"
     LOG_DIR: str = "logs"
-    SYSTEM_SMTP_HOST: str = ""
-    SYSTEM_SMTP_PORT: int = 587
-    SYSTEM_SMTP_USER: str = ""
-    SYSTEM_SMTP_PASSWORD: str = ""
-    SYSTEM_FROM_EMAIL: str = "noreply@example.com"
+    # Gmail SMTP uses STARTTLS on port 587, so secure remains false until the
+    # server upgrades the connection. Google requires 2FA to be enabled and a
+    # dedicated App Password for SMTP access. Do not use a regular Gmail password.
+    SMTP_HOST: str = Field(default="", validation_alias="SMTP_HOST")
+    SMTP_PORT: int = Field(default=587, validation_alias="SMTP_PORT")
+    SMTP_USER: str = Field(default="", validation_alias="SMTP_USER")
+    SMTP_PASS: str = Field(default="", validation_alias="SMTP_PASS")
+    SMTP_FROM: str = Field(default="", validation_alias="SMTP_FROM")
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
@@ -61,6 +64,26 @@ class Settings(BaseSettings):
         if environment == "production" and "*" in value:
             raise ValueError("Wildcard CORS origins are not allowed in production.")
         return value
+
+    @model_validator(mode="after")
+    def validate_smtp_settings(self) -> "Settings":
+        smtp_values = [self.SMTP_HOST, self.SMTP_USER, self.SMTP_PASS, self.SMTP_FROM]
+        populated = [bool(value.strip()) for value in smtp_values]
+        if any(populated) and not all(populated):
+            raise ValueError("SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM must be provided together.")
+        return self
+
+    @property
+    def email_enabled(self) -> bool:
+        return all(
+            value.strip()
+            for value in (
+                self.SMTP_HOST,
+                self.SMTP_USER,
+                self.SMTP_PASS,
+                self.SMTP_FROM,
+            )
+        )
 
 
 @lru_cache
