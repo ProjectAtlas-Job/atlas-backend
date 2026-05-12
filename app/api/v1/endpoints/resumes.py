@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from loguru import logger
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,6 +74,7 @@ async def upload_resume(
     try:
         await enqueue_resume_processing(resume_id=resume.id, file_bytes=file_bytes)
     except Exception:
+        logger.exception("Resume processing could not be started for resume_id={}", resume.id)
         resume.status = "error"
         await db.commit()
         raise HTTPException(

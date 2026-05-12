@@ -9,6 +9,7 @@ from uuid import uuid4
 from arq import create_pool
 from arq.connections import RedisSettings
 from fastapi import HTTPException, status
+from loguru import logger
 
 from app.core.config import settings
 
@@ -102,6 +103,12 @@ async def upload_resume_to_storage(*, user_id: int, extension: str, file_bytes: 
             file_options={"content-type": STORAGE_CONTENT_TYPES[extension], "upsert": "false"},
         )
     except Exception as exc:
+        logger.exception(
+            "Resume storage upload failed for user_id={} bucket={} path={}",
+            user_id,
+            settings.SUPABASE_RESUMES_BUCKET,
+            storage_path,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Resume storage upload failed.",
@@ -113,5 +120,8 @@ async def enqueue_resume_processing(*, resume_id: int, file_bytes: bytes) -> Non
     redis = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
     try:
         await redis.enqueue_job("process_resume", resume_id=resume_id, file_bytes=file_bytes)
+    except Exception:
+        logger.exception("Resume processing enqueue failed for resume_id={}", resume_id)
+        raise
     finally:
         await redis.close()
