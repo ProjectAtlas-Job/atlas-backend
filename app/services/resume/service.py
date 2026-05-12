@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -91,14 +92,14 @@ def _get_supabase_client() -> Any:
 
 
 async def upload_resume_to_storage(*, user_id: int, extension: str, file_bytes: bytes) -> str:
-    storage_path = f"resumes/{user_id}/{uuid4()}.{extension}"
+    storage_path = f"{user_id}/{uuid4()}.{extension}"
     client = _get_supabase_client()
     try:
         await asyncio.to_thread(
             client.storage.from_(settings.SUPABASE_RESUMES_BUCKET).upload,
-            storage_path,
-            file_bytes,
-            {"content-type": STORAGE_CONTENT_TYPES[extension], "upsert": "false"},
+            path=storage_path,
+            file=BytesIO(file_bytes),
+            file_options={"content-type": STORAGE_CONTENT_TYPES[extension], "upsert": "false"},
         )
     except Exception as exc:
         raise HTTPException(
