@@ -3,6 +3,7 @@ FROM python:3.12-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev libpango-1.0-0 libpangoft2-1.0-0 \
     libcairo2 libgdk-pixbuf2.0-0 libffi-dev shared-mime-info curl \
+    file libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

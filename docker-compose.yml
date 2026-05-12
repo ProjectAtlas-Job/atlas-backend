@@ -11,13 +11,12 @@ services:
       timeout: 10s
       retries: 3
 
-  # worker disabled on AWS t2.micro (1 GB RAM) - re-enable on Oracle (24 GB)
-  # worker:
-  #   image: ghcr.io/projectatlas-job/atlas-backend:latest
-  #   command: python -m app.worker.arq_worker
-  #   restart: unless-stopped
-  #   env_file: .env
-  #   depends_on: [redis]
+  worker:
+    image: ghcr.io/projectatlas-job/atlas-backend:latest
+    command: arq app.worker.arq_worker.WorkerSettings
+    restart: unless-stopped
+    env_file: .env
+    depends_on: [redis]
 
   redis:
     image: redis:7-alpine
