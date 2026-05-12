@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from arq import create_pool
-from arq.connections import RedisSettings
 from fastapi import HTTPException, status
 from loguru import logger
 
@@ -115,12 +113,14 @@ async def upload_resume_to_storage(*, user_id: int, extension: str, file_bytes: 
     return storage_path
 
 
-async def enqueue_resume_processing(*, resume_id: int, file_bytes: bytes) -> None:
-    redis = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+async def enqueue_resume_processing(*, arq_pool: Any, resume_id: int, file_bytes: bytes, filename: str) -> None:
     try:
-        await redis.enqueue_job("process_resume", resume_id=resume_id, file_bytes=file_bytes)
+        await arq_pool.enqueue_job(
+            "process_resume",
+            resume_id=resume_id,
+            file_bytes=file_bytes,
+            filename=filename,
+        )
     except Exception:
         logger.exception("Resume processing enqueue failed for resume_id={}", resume_id)
         raise
-    finally:
-        await redis.close()

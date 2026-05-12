@@ -8,7 +8,7 @@ from importlib import import_module, reload
 
 from app.services.resume.parser import extract_text, normalise_text
 from app.services.resume.scorer import structural_score
-from app.worker.tasks.resume import process_resume
+from app.worker.tasks.resume_tasks import process_resume
 
 
 def test_extract_text_decodes_utf8_for_plain_text() -> None:
@@ -66,7 +66,7 @@ def test_semantic_score_uses_cosine_similarity(monkeypatch) -> None:
 
 
 def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
-    import app.worker.tasks.resume as worker_resume
+    import app.worker.tasks.resume_tasks as worker_resume
 
     class FakeResume:
         def __init__(self) -> None:
@@ -116,12 +116,14 @@ def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
     monkeypatch.setattr(worker_resume, "structural_score", lambda text: 0.75)
     monkeypatch.setattr(worker_resume, "semantic_score", lambda text, embedding: 0.5)
     refreshed: list[int] = []
+
     async def fake_refresh_profile_completeness(session, *, user_id: int):
         refreshed.append(user_id)
         return None
+
     monkeypatch.setattr(worker_resume, "refresh_profile_completeness", fake_refresh_profile_completeness)
 
-    asyncio.run(process_resume({}, resume_id=resume.id, file_bytes=b"hello"))
+    result = asyncio.run(process_resume({}, resume_id=resume.id, file_bytes=b"hello", filename="resume.txt"))
 
     assert resume.status == "completed"
     assert resume.raw_text == "clean text"
@@ -130,3 +132,61 @@ def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
     assert resume.semantic_score == 0.5
     assert refreshed == [12]
     assert fake_session.commit_count == 2
+    assert result == {"resume_id": 7, "status": "completed"}
+
+
+def test_process_resume_uses_filename_extension(monkeypatch) -> None:
+    import app.worker.tasks.resume_tasks as worker_resume
+
+    class FakeResume:
+        def __init__(self) -> None:
+            self.id = 9
+            self.user_id = 3
+            self.status = "pending"
+            self.updated_at = None
+            self.raw_text = None
+            self.embedding = None
+            self.structural_score = None
+            self.semantic_score = None
+
+    resume = FakeResume()
+    formats: list[str] = []
+
+    class FakeResult:
+        def scalar_one_or_none(self) -> FakeResume:
+            return resume
+
+    class FakeSession:
+        async def __aenter__(self) -> "FakeSession":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def execute(self, query) -> FakeResult:
+            return FakeResult()
+
+        async def commit(self) -> None:
+            return None
+
+        async def flush(self) -> None:
+            return None
+
+        async def rollback(self) -> None:
+            raise AssertionError("rollback should not be called on successful processing")
+
+    monkeypatch.setattr(worker_resume, "AsyncSessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(worker_resume, "extract_text", lambda file_bytes, format: formats.append(format) or "raw")
+    monkeypatch.setattr(worker_resume, "normalise_text", lambda raw: "normalized")
+    monkeypatch.setattr(worker_resume, "embed", lambda text: [0.3, 0.4])
+    monkeypatch.setattr(worker_resume, "structural_score", lambda text: 0.25)
+    monkeypatch.setattr(worker_resume, "semantic_score", lambda text, embedding: 0.9)
+    monkeypatch.setattr(worker_resume, "refresh_profile_completeness", lambda session, *, user_id: asyncio.sleep(0))
+
+    result = asyncio.run(process_resume({}, resume_id=9, file_bytes=b"%PDF", filename="test.pdf"))
+
+    assert formats == ["pdf"]
+    assert resume.status == "completed"
+    assert resume.structural_score is not None
+    assert resume.semantic_score is not None
+    assert result == {"resume_id": 9, "status": "completed"}

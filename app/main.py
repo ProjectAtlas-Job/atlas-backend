@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
@@ -18,10 +20,14 @@ openapi_url = None if settings.ENVIRONMENT == "production" else "/openapi.json"
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
-    if settings.email_enabled:
-        await mail_service.verify_connection()
-    yield
+async def lifespan(app: FastAPI):
+    app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+    try:
+        if settings.email_enabled:
+            await mail_service.verify_connection()
+        yield
+    finally:
+        await app.state.arq_pool.close()
 
 
 app = FastAPI(title="Project Atlas", version="1.0.0", openapi_url=openapi_url, lifespan=lifespan)

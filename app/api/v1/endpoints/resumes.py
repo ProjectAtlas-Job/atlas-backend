@@ -6,7 +6,7 @@ from loguru import logger
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_active_user, get_db
+from app.api.deps import get_arq_pool, get_current_active_user, get_db
 from app.db.models.resume import Resume
 from app.db.models.user import User
 from app.schemas.resume import ResumeRead, ResumeStatusRead, ResumeUpdate
@@ -41,10 +41,12 @@ async def upload_resume(
     resume_file: Annotated[UploadFile, File(...)],
     label: Annotated[str | None, Form()] = None,
     db: AsyncSession = Depends(get_db),
+    arq_pool=Depends(get_arq_pool),
     current_user: User = Depends(get_current_active_user),
 ) -> ResumeRead:
     file_bytes = await resume_file.read()
     extension = get_resume_extension(resume_file.filename)
+    filename = resume_file.filename or f"resume.{extension}"
     validate_resume_upload(file_bytes, extension)
     storage_path = await upload_resume_to_storage(
         user_id=current_user.id,
@@ -60,7 +62,7 @@ async def upload_resume(
     )
     resume = Resume(
         user_id=current_user.id,
-        filename=resume_file.filename or f"resume.{extension}",
+        filename=filename,
         format=extension,
         label=normalize_resume_label(label),
         file_data=file_bytes,
@@ -73,7 +75,12 @@ async def upload_resume(
     await db.refresh(resume)
 
     try:
-        await enqueue_resume_processing(resume_id=resume.id, file_bytes=file_bytes)
+        await enqueue_resume_processing(
+            arq_pool=arq_pool,
+            resume_id=resume.id,
+            file_bytes=file_bytes,
+            filename=filename,
+        )
     except Exception:
         logger.exception("Resume processing could not be started for resume_id={}", resume.id)
         resume.status = "error"

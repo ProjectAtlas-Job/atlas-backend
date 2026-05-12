@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,10 @@ from app.db.session import get_db as session_get_db
 async def get_db():
     async for session in session_get_db():
         yield session
+
+
+def get_arq_pool(request: Request):
+    return request.app.state.arq_pool
 
 
 async def get_current_user(

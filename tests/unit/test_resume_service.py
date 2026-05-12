@@ -26,6 +26,14 @@ class _FakeSupabaseClient:
         self.storage = storage
 
 
+class _FakeArqPool:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def enqueue_job(self, name: str, **kwargs: object) -> None:
+        self.calls.append({"name": name, **kwargs})
+
+
 class ResumeServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_upload_resume_to_storage_passes_raw_bytes_to_storage_client(self) -> None:
         bucket = _FakeBucket()
@@ -52,6 +60,28 @@ class ResumeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             bucket.calls[0]["file_options"],
             {"content-type": "application/pdf", "upsert": "false"},
+        )
+
+    async def test_enqueue_resume_processing_includes_filename(self) -> None:
+        arq_pool = _FakeArqPool()
+
+        await service.enqueue_resume_processing(
+            arq_pool=arq_pool,
+            resume_id=11,
+            file_bytes=b"resume-bytes",
+            filename="resume.pdf",
+        )
+
+        self.assertEqual(
+            arq_pool.calls,
+            [
+                {
+                    "name": "process_resume",
+                    "resume_id": 11,
+                    "file_bytes": b"resume-bytes",
+                    "filename": "resume.pdf",
+                }
+            ],
         )
 
 
