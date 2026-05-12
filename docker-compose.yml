@@ -1,9 +1,14 @@
+x-backend-image: &backend-image
+  build:
+    context: .
+  image: ghcr.io/projectatlas-job/atlas-backend:latest
+  env_file: .env
+  depends_on: [redis]
+
 services:
   backend:
-    image: ghcr.io/projectatlas-job/atlas-backend:latest
+    <<: *backend-image
     restart: unless-stopped
-    env_file: .env
-    depends_on: [redis]
     expose: ["8000"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -12,11 +17,9 @@ services:
       retries: 3
 
   worker:
-    image: ghcr.io/projectatlas-job/atlas-backend:latest
+    <<: *backend-image
     command: arq app.worker.arq_worker.WorkerSettings
     restart: unless-stopped
-    env_file: .env
-    depends_on: [redis]
 
   redis:
     image: redis:7-alpine
