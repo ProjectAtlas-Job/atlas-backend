@@ -50,6 +50,7 @@ class User(Base):
     settings: Mapped["UserSettings | None"] = relationship(
         "UserSettings", back_populates="user", cascade="all, delete-orphan", uselist=False
     )
+    resumes: Mapped[list["Resume"]] = relationship("Resume", back_populates="user")
 
 
 @event.listens_for(User, "before_insert")

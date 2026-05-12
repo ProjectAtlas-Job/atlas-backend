@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_ID: str = ""
     GITHUB_CLIENT_SECRET: str = ""
     GITHUB_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/github/callback"
+    SUPABASE_URL: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
+    SUPABASE_RESUMES_BUCKET: str = "resumes"
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
