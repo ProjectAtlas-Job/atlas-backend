@@ -28,6 +28,8 @@ class AppSmokeTests(unittest.TestCase):
         self.assertIn("/api/v1/resumes/", routes)
         self.assertIn("/api/v1/resumes/{resume_id}/status", routes)
         self.assertIn("/api/v1/resumes/{resume_id}", routes)
+        self.assertIn("/api/v1/users/me", routes)
+        self.assertIn("/api/v1/users/me/profile-completeness", routes)
 
 
 if __name__ == "__main__":
