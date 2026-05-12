@@ -71,6 +71,7 @@ def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
     class FakeResume:
         def __init__(self) -> None:
             self.id = 7
+            self.user_id = 12
             self.format = "txt"
             self.status = "pending"
             self.raw_text = None
@@ -100,6 +101,9 @@ def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
         async def commit(self) -> None:
             self.commit_count += 1
 
+        async def flush(self) -> None:
+            return None
+
         async def rollback(self) -> None:
             raise AssertionError("rollback should not be called on successful processing")
 
@@ -111,6 +115,11 @@ def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
     monkeypatch.setattr(worker_resume, "embed", lambda text: [0.1, 0.2])
     monkeypatch.setattr(worker_resume, "structural_score", lambda text: 0.75)
     monkeypatch.setattr(worker_resume, "semantic_score", lambda text, embedding: 0.5)
+    refreshed: list[int] = []
+    async def fake_refresh_profile_completeness(session, *, user_id: int):
+        refreshed.append(user_id)
+        return None
+    monkeypatch.setattr(worker_resume, "refresh_profile_completeness", fake_refresh_profile_completeness)
 
     asyncio.run(process_resume({}, resume_id=resume.id, file_bytes=b"hello"))
 
@@ -119,4 +128,5 @@ def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
     assert resume.embedding == [0.1, 0.2]
     assert resume.structural_score == 0.75
     assert resume.semantic_score == 0.5
+    assert refreshed == [12]
     assert fake_session.commit_count == 2

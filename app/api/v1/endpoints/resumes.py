@@ -10,6 +10,7 @@ from app.api.deps import get_current_active_user, get_db
 from app.db.models.resume import Resume
 from app.db.models.user import User
 from app.schemas.resume import ResumeRead, ResumeStatusRead, ResumeUpdate
+from app.services.profile.completeness import refresh_profile_completeness
 from app.services.resume.service import (
     enqueue_resume_processing,
     get_resume_extension,
@@ -152,5 +153,7 @@ async def delete_resume(
     resume = await _get_user_resume(db=db, user_id=current_user.id, resume_id=resume_id)
     resume.deleted_at = datetime.now(UTC)
     resume.is_primary = False
+    await db.flush()
+    await refresh_profile_completeness(db, user_id=current_user.id)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

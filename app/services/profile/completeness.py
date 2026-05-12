@@ -1,5 +1,10 @@
 from collections.abc import Callable
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.db.models.resume import Resume
 from app.db.models.user import User
 
 MissingField = dict[str, object]
@@ -47,3 +52,40 @@ def compute_completeness(
         missing_fields.append({"field": field, "points": points, "action_url": action_url})
 
     return total_score, missing_fields
+
+
+async def get_profile_completeness(
+    db: AsyncSession,
+    *,
+    user_id: int,
+) -> tuple[User, int, list[MissingField]]:
+    user_result = await db.execute(
+        select(User).options(selectinload(User.settings)).where(User.id == user_id)
+    )
+    user = user_result.scalar_one()
+
+    resume_result = await db.execute(
+        select(Resume.id).where(
+            Resume.user_id == user_id,
+            Resume.status == "completed",
+            Resume.deleted_at.is_(None),
+        )
+    )
+    has_completed_resume = resume_result.scalar_one_or_none() is not None
+    gmail_connected = bool(user.settings and user.settings.gmail_access_token_encrypted)
+    score, missing = compute_completeness(
+        user=user,
+        has_completed_resume=has_completed_resume,
+        gmail_connected=gmail_connected,
+    )
+    return user, score, missing
+
+
+async def refresh_profile_completeness(
+    db: AsyncSession,
+    *,
+    user_id: int,
+) -> tuple[User, int, list[MissingField]]:
+    user, score, missing = await get_profile_completeness(db, user_id=user_id)
+    user.profile_completeness = score
+    return user, score, missing

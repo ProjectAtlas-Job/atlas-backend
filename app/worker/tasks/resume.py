@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+
 from sqlalchemy import select
 
 from app.db.models.resume import Resume
 from app.db.session import AsyncSessionLocal
+from app.services.profile.completeness import refresh_profile_completeness
 from app.services.resume.embedder import embed
 from app.services.resume.parser import extract_text, normalise_text
 from app.services.resume.scorer import semantic_score, structural_score
@@ -23,13 +26,19 @@ async def process_resume(ctx: dict[str, object], *, resume_id: int, file_bytes: 
         await session.commit()
 
         try:
-            raw_text = normalise_text(extract_text(file_bytes, resume.format))
-            embedding = embed(raw_text)
+            raw_text = await asyncio.to_thread(
+                lambda: normalise_text(extract_text(file_bytes, resume.format))
+            )
+            embedding = await asyncio.to_thread(embed, raw_text)
+            structural = await asyncio.to_thread(structural_score, raw_text)
+            semantic = await asyncio.to_thread(semantic_score, raw_text, embedding)
             resume.raw_text = raw_text
             resume.embedding = embedding
-            resume.structural_score = structural_score(raw_text)
-            resume.semantic_score = semantic_score(raw_text, embedding)
+            resume.structural_score = structural
+            resume.semantic_score = semantic
             resume.status = "completed"
+            await session.flush()
+            await refresh_profile_completeness(session, user_id=resume.user_id)
             await session.commit()
         except Exception:
             await session.rollback()
