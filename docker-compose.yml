@@ -3,6 +3,8 @@ x-backend-image: &backend-image
     context: .
   image: ghcr.io/projectatlas-job/atlas-backend:latest
   env_file: .env
+  environment:
+    REDIS_URL: redis://redis:6379/0
   depends_on: [redis]
 
 services:
