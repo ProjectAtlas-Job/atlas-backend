@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -99,7 +98,7 @@ async def upload_resume_to_storage(*, user_id: int, extension: str, file_bytes: 
         await asyncio.to_thread(
             client.storage.from_(settings.SUPABASE_RESUMES_BUCKET).upload,
             path=storage_path,
-            file=BytesIO(file_bytes),
+            file=file_bytes,
             file_options={"content-type": STORAGE_CONTENT_TYPES[extension], "upsert": "false"},
         )
     except Exception as exc:
