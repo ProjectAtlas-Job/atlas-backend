@@ -6,6 +6,7 @@ import sys
 import types
 from importlib import import_module, reload
 
+from app.db.types import Vector
 from app.services.resume.parser import extract_text, normalise_text
 from app.services.resume.scorer import structural_score
 from app.worker.tasks.resume_tasks import process_resume
@@ -63,6 +64,17 @@ def test_semantic_score_uses_cosine_similarity(monkeypatch) -> None:
 
     assert math.isclose(scorer.semantic_score("ignored", [1.0, 0.0]), 1.0)
     assert math.isclose(scorer.semantic_score("ignored", [0.0, 1.0]), 0.0)
+
+
+def test_vector_type_serializes_and_parses_embeddings() -> None:
+    vector = Vector(3)
+    binder = vector.bind_processor(None)
+    reader = vector.result_processor(None, None)
+
+    assert binder is not None
+    assert reader is not None
+    assert binder([0.25, -1, 3.5]) == "[0.25,-1,3.5]"
+    assert reader("[0.25,-1,3.5]") == [0.25, -1.0, 3.5]
 
 
 def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
