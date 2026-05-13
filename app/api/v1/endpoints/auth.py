@@ -512,7 +512,7 @@ async def github_connect() -> RedirectResponse:
         {
             "client_id": settings.GITHUB_CLIENT_ID,
             "redirect_uri": settings.GITHUB_REDIRECT_URI,
-            "scope": "read:user public_repo",
+            "scope": "read:user user:email public_repo",
         }
     )
     return RedirectResponse(url=f"https://github.com/login/oauth/authorize?{params}")
