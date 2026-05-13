@@ -300,11 +300,6 @@ async def refresh_token(
     return Token(access_token=access_token, token_type="bearer")
 
 
-@router.get("/me", response_model=UserRead)
-async def read_me(current_user: User = Depends(get_current_active_user)) -> UserRead:
-    return UserRead.model_validate(current_user)
-
-
 @router.post("/verify-email")
 async def verify_email(
     payload: VerifyEmailRequest,
