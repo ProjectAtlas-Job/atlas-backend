@@ -12,6 +12,19 @@ class ProfileCompletenessRead(BaseModel):
     missing: list[ProfileCompletenessMissingField]
 
 
+class GitHubScanMetadata(BaseModel):
+    languages: dict[str, int]
+    topics: list[str]
+    top_repos: list[dict[str, str | int | None]]
+    total_stars: int
+
+
+class GitHubScanRead(BaseModel):
+    status: str
+    github_username: str | None = None
+    metadata: GitHubScanMetadata | None = None
+
+
 class UserUpdate(BaseModel):
     full_name: str | None = None
     phone: str | None = None

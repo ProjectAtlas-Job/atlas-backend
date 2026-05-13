@@ -36,6 +36,8 @@ from app.schemas.auth import (
 )
 from app.services.email.mail_service import mail_service
 from app.services.email.templates import EmailContent, otp_email, password_reset_email, verification_email, welcome_email
+from app.services.github.scanner import scan_github_repos
+from app.services.profile.completeness import refresh_profile_completeness
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -565,8 +567,19 @@ async def github_callback(
         full_name=github_user.get("name"),
         github_username=github_user.get("login"),
     )
+    github_username = github_user.get("login")
+    if isinstance(github_username, str) and github_username.strip():
+        user.github_username = github_username.strip()
+        user.github_metadata = await scan_github_repos(
+            username=user.github_username,
+            access_token=github_tokens["access_token"],
+        )
+        await refresh_profile_completeness(db, user_id=user.id)
+        await db.commit()
+        await db.refresh(user)
+
     access_token = create_access_token(subject=str(user.id), email=user.email)
     refresh_token = await _issue_refresh_token(user.id)
-    redirect = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard?access_token={access_token}")
+    redirect = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard/profile?github=connected&access_token={access_token}")
     _set_refresh_cookie(redirect, refresh_token, _refresh_token_ttl_seconds())
     return redirect
