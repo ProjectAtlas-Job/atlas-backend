@@ -580,6 +580,6 @@ async def github_callback(
 
     access_token = create_access_token(subject=str(user.id), email=user.email)
     refresh_token = await _issue_refresh_token(user.id)
-    redirect = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard/profile?github=connected&access_token={access_token}")
+    redirect = RedirectResponse(url=f"{settings.FRONTEND_URL}/profile?github=connected")
     _set_refresh_cookie(redirect, refresh_token, _refresh_token_ttl_seconds())
     return redirect

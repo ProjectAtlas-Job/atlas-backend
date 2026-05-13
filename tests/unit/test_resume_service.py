@@ -52,7 +52,7 @@ class ResumeServiceTests(unittest.IsolatedAsyncioTestCase):
             service._get_supabase_client = original_get_client
 
         self.assertEqual(storage.bucket_name, service.settings.SUPABASE_RESUMES_BUCKET)
-        self.assertTrue(storage_path.startswith("2/"))
+        self.assertTrue(storage_path.startswith("resumes/2/"))
         self.assertTrue(storage_path.endswith(".pdf"))
         self.assertEqual(len(bucket.calls), 1)
         self.assertEqual(bucket.calls[0]["path"], storage_path)

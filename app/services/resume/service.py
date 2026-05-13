@@ -90,7 +90,7 @@ def _get_supabase_client() -> Any:
 
 
 async def upload_resume_to_storage(*, user_id: int, extension: str, file_bytes: bytes) -> str:
-    storage_path = f"{user_id}/{uuid4()}.{extension}"
+    storage_path = f"resumes/{user_id}/{uuid4()}.{extension}"
     client = _get_supabase_client()
     try:
         await asyncio.to_thread(
