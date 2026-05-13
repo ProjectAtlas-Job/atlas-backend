@@ -1,4 +1,6 @@
-from pydantic import BaseModel, field_validator
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProfileCompletenessMissingField(BaseModel):
@@ -31,14 +33,12 @@ class UserUpdate(BaseModel):
     location: str | None = None
     bio: str | None = None
     linkedin_url: str | None = None
-    github_username: str | None = None
     portfolio_url: str | None = None
-    experience_level: str | None = None
+    experience_level: Literal["fresher", "junior", "mid", "senior", "lead"] | None = None
     target_work_types: list[str] | None = None
-    target_roles: list[str] | None = None
+    target_roles: list[str] | None = Field(default=None, max_length=10)
     target_locations: list[str] | None = None
     skills: list[str] | None = None
-    has_completed_onboarding: bool | None = None
 
     @field_validator(
         "full_name",
@@ -46,9 +46,7 @@ class UserUpdate(BaseModel):
         "location",
         "bio",
         "linkedin_url",
-        "github_username",
         "portfolio_url",
-        "experience_level",
         mode="before",
     )
     @classmethod
@@ -65,3 +63,33 @@ class UserUpdate(BaseModel):
             return None
         normalized_values = [item.strip() for item in value if item and item.strip()]
         return normalized_values or None
+
+    @field_validator("target_work_types")
+    @classmethod
+    def validate_target_work_types(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+
+        allowed_values = {"full_time", "part_time", "internship", "contract", "freelance"}
+        invalid_values = [item for item in value if item not in allowed_values]
+        if invalid_values:
+            raise ValueError(
+                "target_work_types must only contain: full_time, part_time, internship, contract, freelance."
+            )
+        return value
+
+    @field_validator("target_roles")
+    @classmethod
+    def validate_target_roles(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if len(value) > 10:
+            raise ValueError("target_roles cannot contain more than 10 entries.")
+        return value
+
+    @field_validator("skills")
+    @classmethod
+    def normalize_skills(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return [item.lower() for item in value]

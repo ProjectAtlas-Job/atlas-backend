@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +12,11 @@ from app.services.profile.completeness import get_profile_completeness, refresh_
 router = APIRouter(prefix="/users", tags=["users"])
 
 
+@router.get("/me", response_model=UserRead)
+async def read_me(current_user: User = Depends(get_current_active_user)) -> UserRead:
+    return UserRead.model_validate(current_user)
+
+
 @router.put("/me", response_model=UserRead)
 async def update_me(
     payload: UserUpdate,
@@ -19,7 +26,12 @@ async def update_me(
     user = current_user
 
     for field_name in payload.model_fields_set:
-        setattr(user, field_name, getattr(payload, field_name))
+        value = getattr(payload, field_name)
+        if value is None:
+            continue
+        setattr(user, field_name, value)
+
+    user.updated_at = datetime.now(UTC)
 
     await db.flush()
     user, _, _ = await refresh_profile_completeness(db, user_id=user.id)
