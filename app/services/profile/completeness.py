@@ -69,7 +69,7 @@ async def get_profile_completeness(
             Resume.user_id == user_id,
             Resume.status == "completed",
             Resume.deleted_at.is_(None),
-        )
+        ).limit(1)
     )
     has_completed_resume = resume_result.scalar_one_or_none() is not None
     gmail_connected = bool(user.settings and user.settings.gmail_access_token_encrypted)

@@ -2,7 +2,7 @@ import unittest
 
 from app.db.models.user import User
 from app.db.models.user_settings import UserSettings
-from app.services.profile.completeness import compute_completeness
+from app.services.profile.completeness import compute_completeness, get_profile_completeness
 
 
 class ProfileCompletenessTests(unittest.TestCase):
@@ -69,3 +69,35 @@ class ProfileCompletenessTests(unittest.TestCase):
                 {"field": "llm", "points": 5, "action_url": "/profile#llm"},
             ],
         )
+
+
+class ProfileCompletenessQueryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_get_profile_completeness_handles_multiple_completed_resumes(self) -> None:
+        user = User(email="user@example.com", full_name="Atlas User")
+        user.settings = UserSettings(use_platform_api_key=False, gmail_access_token_encrypted=None)
+
+        class FakeUserResult:
+            def scalar_one(self) -> User:
+                return user
+
+        class FakeResumeResult:
+            def scalar_one_or_none(self) -> int | None:
+                return 101
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def execute(self, query):  # type: ignore[no-untyped-def]
+                self.calls += 1
+                if self.calls == 1:
+                    return FakeUserResult()
+                return FakeResumeResult()
+
+        db = FakeSession()
+
+        resolved_user, score, missing = await get_profile_completeness(db, user_id=1)
+
+        self.assertIs(resolved_user, user)
+        self.assertEqual(score, 25)
+        self.assertFalse(any(item["field"] == "resume" for item in missing))
