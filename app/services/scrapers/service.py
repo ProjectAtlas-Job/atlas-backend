@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 from uuid import uuid4
 
 from arq.jobs import Job
@@ -25,16 +26,19 @@ async def enqueue_scrape_job(
         url=url,
         source_type=source_type,
         user_id=current_user.id,
-        keywords=keywords,
         _job_id=task_id,
     )
     db.add(
         ActionLog(
             user_id=current_user.id,
             action_type="scraper",
-            task_id=task_id,
-            url=url,
             status="running",
+            meta={
+                "task_id": task_id,
+                "url": url,
+                "source_type": source_type,
+                "keywords": keywords or [],
+            },
         )
     )
     await db.commit()
@@ -56,11 +60,14 @@ async def cancel_scraper_jobs(
     )
     logs = result.scalars().all()
     for log in logs:
-        job = Job(log.task_id, redis=arq_pool)
+        task_id = _action_log_meta(log).get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            continue
+        job = Job(task_id, redis=arq_pool)
         await job.abort()
         log.status = "cancelled"
     await db.commit()
-    return len(logs)
+    return sum(1 for log in logs if log.status == "cancelled")
 
 
 async def list_running_scraper_jobs(
@@ -73,6 +80,12 @@ async def list_running_scraper_jobs(
             ActionLog.user_id == current_user.id,
             ActionLog.action_type == "scraper",
             ActionLog.status == "running",
-        ).order_by(ActionLog.started_at.desc(), ActionLog.id.desc())
+        ).order_by(ActionLog.created_at.desc(), ActionLog.id.desc())
     )
     return list(result.scalars().all())
+
+
+def _action_log_meta(log: ActionLog) -> dict[str, Any]:
+    if isinstance(log.meta, dict):
+        return log.meta
+    return {}

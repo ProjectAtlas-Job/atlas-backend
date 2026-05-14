@@ -7,6 +7,8 @@ psycopg2-binary==2.9.10
 pgvector==0.3.6
 pydantic[email]==2.10.3
 pydantic-settings==2.7.0
+langgraph==0.2.60
+langchain==0.3.18
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
@@ -18,10 +20,12 @@ python-multipart==0.0.20
 arq==0.26.1
 redis==5.2.1
 playwright==1.49.1
+beautifulsoup4==4.12.3
 python-magic==0.4.27
 supabase==2.10.0
 PyMuPDF==1.24.11
 python-docx==1.1.2
+instructor==1.7.0
 spacy==3.8.3
 sentence-transformers==3.3.1
 pytest==8.3.4

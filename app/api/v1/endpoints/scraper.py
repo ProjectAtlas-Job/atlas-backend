@@ -54,12 +54,19 @@ async def get_scraper_status(
     current_user: User = Depends(get_current_active_user),
 ) -> list[ScraperStatusItem]:
     logs = await list_running_scraper_jobs(db=db, current_user=current_user)
-    return [
-        ScraperStatusItem(
-            task_id=log.task_id,
-            url=log.url,
-            started_at=log.started_at,
-            status=log.status,
+    items: list[ScraperStatusItem] = []
+    for log in logs:
+        meta = log.meta if isinstance(log.meta, dict) else {}
+        task_id = meta.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            continue
+        url = meta.get("url")
+        items.append(
+            ScraperStatusItem(
+                task_id=task_id,
+                url=url if isinstance(url, str) else None,
+                started_at=log.created_at,
+                status=log.status,
+            )
         )
-        for log in logs
-    ]
+    return items
