@@ -23,6 +23,11 @@ class JobPostingRead(BaseModel):
     posted_at: datetime | None
     scraped_at: datetime
 
+    @field_validator("work_type", "skills_required", mode="before")
+    @classmethod
+    def normalize_array_fields(cls, value: list[str] | None) -> list[str]:
+        return list(value or [])
+
 
 class JobListRead(BaseModel):
     total: int

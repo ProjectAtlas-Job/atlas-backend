@@ -27,6 +27,6 @@ supabase==2.10.0
 PyMuPDF==1.24.11
 python-docx==1.1.2
 instructor==1.7.0
-spacy==3.8.3
+spacy==3.8.14
 sentence-transformers==3.3.1
 pytest==8.3.4

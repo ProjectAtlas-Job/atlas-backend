@@ -1,7 +1,7 @@
 """add_job_postings_and_user_job_saves
 
 Revision ID: 9f5ab90d2c41
-Revises: c3a8b7a6d4e1
+Revises: 30ef551b0dbe
 Create Date: 2026-05-14 21:35:00.000000
 
 """
