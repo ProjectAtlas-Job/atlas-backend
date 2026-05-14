@@ -1,6 +1,7 @@
 from app.db.base_class import Base
 
 
+from app.db.models.action_log import ActionLog  # noqa: E402,F401
 from app.db.models.company import Company  # noqa: E402,F401
 from app.db.models.job_posting import JobPosting  # noqa: E402,F401
 from app.db.models.resume import Resume  # noqa: E402,F401

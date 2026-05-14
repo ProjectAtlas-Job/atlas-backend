@@ -1,14 +1,20 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import Date, Text, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_active_user, get_db
+from app.api.deps import get_arq_pool, get_current_active_user, get_db
 from app.db.models.job_posting import JobPosting
 from app.db.models.user import User
 from app.schemas.job import JobListParams, JobListRead, JobPostingRead
+from app.schemas.scraper import (
+    ManualJobSubmissionDuplicateResponse,
+    ManualJobSubmissionQueuedResponse,
+    ManualJobSubmissionRequest,
+)
+from app.services.scrapers.service import enqueue_scrape_job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -104,6 +110,41 @@ async def list_jobs(
         items=[JobPostingRead.model_validate(job) for job in jobs],
         skip=params.skip,
         limit=params.limit,
+    )
+
+
+@router.post(
+    "/manual",
+    response_model=ManualJobSubmissionQueuedResponse | ManualJobSubmissionDuplicateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def submit_manual_job(
+    payload: ManualJobSubmissionRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    arq_pool: object = Depends(get_arq_pool),
+) -> ManualJobSubmissionQueuedResponse | ManualJobSubmissionDuplicateResponse:
+    source_url = str(payload.url)
+    result = await db.execute(select(JobPosting).where(JobPosting.source_url == source_url))
+    existing_job = result.scalar_one_or_none()
+
+    if existing_job is not None:
+        existing_job.last_checked_at = datetime.now(UTC)
+        await db.commit()
+        response.status_code = status.HTTP_200_OK
+        return ManualJobSubmissionDuplicateResponse(status="already_exists", job_id=existing_job.id)
+
+    await enqueue_scrape_job(
+        arq_pool=arq_pool,
+        db=db,
+        current_user=current_user,
+        url=source_url,
+        source_type="manual",
+    )
+    return ManualJobSubmissionQueuedResponse(
+        status="queued",
+        message="Job is being fetched and parsed",
     )
 
 

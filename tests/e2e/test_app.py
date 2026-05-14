@@ -32,7 +32,11 @@ class AppSmokeTests(unittest.TestCase):
         self.assertIn("/api/v1/users/me/profile-completeness", routes)
         self.assertIn("/api/v1/users/me/github-scan", routes)
         self.assertIn("/api/v1/jobs/", routes)
+        self.assertIn("/api/v1/jobs/manual", routes)
         self.assertIn("/api/v1/jobs/{job_id}", routes)
+        self.assertIn("/api/v1/scraper/run", routes)
+        self.assertIn("/api/v1/scraper/stop", routes)
+        self.assertIn("/api/v1/scraper/status", routes)
 
 
 if __name__ == "__main__":
