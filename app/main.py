@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.rate_limiter import limiter
 from app.services.email.mail_service import mail_service
+from app.worker.scheduler import bind_arq_pool, clear_arq_pool, scheduler
 
 configure_logging()
 
@@ -22,11 +23,17 @@ openapi_url = None if settings.ENVIRONMENT == "production" else "/openapi.json"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+    bind_arq_pool(app.state.arq_pool)
+    if not scheduler.running:
+        scheduler.start()
     try:
         if settings.email_enabled:
             await mail_service.verify_connection()
         yield
     finally:
+        if scheduler.running:
+            scheduler.shutdown()
+        clear_arq_pool()
         await app.state.arq_pool.close()
 
 
