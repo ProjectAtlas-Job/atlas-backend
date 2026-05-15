@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import os
 
 from arq import create_pool
 from arq.connections import RedisSettings
@@ -25,16 +26,26 @@ openapi_url = None if settings.ENVIRONMENT == "production" else "/openapi.json"
 async def lifespan(app: FastAPI):
     app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
     app.state.redis = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    app.state.scheduler_lock_key = "atlas:scheduler:leader"
+    app.state.scheduler_owner = bool(
+        await app.state.redis.set(
+            app.state.scheduler_lock_key,
+            str(os.getpid()),
+            ex=3600,
+            nx=True,
+        )
+    )
     bind_arq_pool(app.state.arq_pool)
-    if not scheduler.running:
+    if app.state.scheduler_owner and not scheduler.running:
         scheduler.start()
     try:
         if settings.email_enabled:
             await mail_service.verify_connection()
         yield
     finally:
-        if scheduler.running:
+        if app.state.scheduler_owner and scheduler.running:
             scheduler.shutdown()
+            await app.state.redis.delete(app.state.scheduler_lock_key)
         clear_arq_pool()
         await app.state.redis.aclose()
         await app.state.arq_pool.close()

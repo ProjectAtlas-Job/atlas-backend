@@ -26,7 +26,7 @@ BOARD_RATE_LIMITS: dict[str, dict[str, int]] = {
     "glassdoor": {"min_delay_s": 5, "max_delay_s": 12, "max_jobs_per_run": 20, "max_pages_per_run": 2, "max_detail_pages_per_run": 6},
     "iimjobs": {"min_delay_s": 3, "max_delay_s": 7, "max_jobs_per_run": 50, "max_pages_per_run": 3, "max_detail_pages_per_run": 0},
     "hirist": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50, "max_pages_per_run": 3, "max_detail_pages_per_run": 0},
-    "cutshort": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50, "max_pages_per_run": 1, "max_detail_pages_per_run": 0},
+    "cutshort": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50, "max_pages_per_run": 2, "max_detail_pages_per_run": 12},
     "unstop": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50, "max_pages_per_run": 1, "max_detail_pages_per_run": 0},
     "hackernews": {"min_delay_s": 2, "max_delay_s": 4, "max_jobs_per_run": 50, "max_pages_per_run": 1, "max_detail_pages_per_run": 0},
     "default": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50, "max_pages_per_run": 2, "max_detail_pages_per_run": 8},

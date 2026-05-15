@@ -46,7 +46,7 @@ async def run_scraper(
 
 
 @router.post("/run-all", response_model=ScraperRunAllResponse, status_code=status.HTTP_202_ACCEPTED)
-@limiter.limit("1/minute", key_func=rate_limit_key)
+@limiter.limit("20/hour", key_func=rate_limit_key)
 async def run_all_scrapers(
     request: Request,
     db: AsyncSession = Depends(get_db),
