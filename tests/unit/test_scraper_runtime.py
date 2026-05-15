@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.services.llm import call_llm
 from app.services.scrapers import get_adapter_for_source, get_adapter_for_url
+from app.services.scrapers.utils import is_access_denied_html
 
 
 class SkillsExtractionModel(BaseModel):
@@ -31,6 +32,17 @@ class ScraperRuntimeTests(unittest.TestCase):
         self.assertIn("postgres", output.skills)
         self.assertIn("docker", output.skills)
         self.assertIn("aws", output.skills)
+
+    def test_access_denied_html_is_detected(self) -> None:
+        html = """
+        <html><body>
+        <h1>Access Denied</h1>
+        You don't have permission to access this server.
+        https://errors.edgesuite.net/example
+        </body></html>
+        """
+
+        self.assertTrue(is_access_denied_html(html))
 
 
 if __name__ == "__main__":

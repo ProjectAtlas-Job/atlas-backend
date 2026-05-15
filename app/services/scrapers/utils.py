@@ -33,6 +33,10 @@ WORK_TYPE_ALIASES = {
 ALLOWED_WORK_TYPES = {"full_time", "part_time", "internship", "contract", "freelance"}
 
 
+class ScraperAccessDeniedError(RuntimeError):
+    """Raised when a board responds with an anti-bot or access-denied page."""
+
+
 def clean_text(value: str | None) -> str:
     if not value:
         return ""
@@ -211,6 +215,21 @@ def html_to_visible_text(html: str) -> str:
     return clean_text(soup.get_text(" ", strip=True))
 
 
+def is_access_denied_html(html: str) -> bool:
+    text = html_to_visible_text(html).lower()
+    denial_markers = [
+        "access denied",
+        "you don't have permission to access",
+        "you do not have permission to access",
+        "errors.edgesuite.net",
+        "akamai",
+        "request blocked",
+        "bot detection",
+        "forbidden",
+    ]
+    return any(marker in text for marker in denial_markers)
+
+
 def absolutize_url(url: str, base_url: str) -> str:
     return urljoin(base_url, url)
 
@@ -336,6 +355,9 @@ async def fetch_html_with_playwright(url: str, *, wait_after_load_ms: int = 3000
             except PlaywrightTimeoutError:
                 await page.goto(url, wait_until="commit", timeout=30000)
                 await page.wait_for_timeout(5000)
-            return await page.content()
+            html = await page.content()
+            if is_access_denied_html(html):
+                raise ScraperAccessDeniedError(f"Access denied by upstream site for {get_domain(url)}")
+            return html
         finally:
             await browser.close()

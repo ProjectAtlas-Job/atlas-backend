@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal
 from app.services.scrapers.service import load_scrape_cursor, persist_scraped_jobs, resolve_scraper_adapter, update_scrape_action_log
+from app.services.scrapers.utils import ScraperAccessDeniedError
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,8 @@ async def scrape_job_board(
                 },
             )
         except Exception as exc:
+            if isinstance(exc, ScraperAccessDeniedError):
+                logger.warning("Scraper blocked by upstream anti-bot for %s (%s)", source_type, url)
             await update_scrape_action_log(
                 db=session,
                 user_id=user_id,
