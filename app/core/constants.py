@@ -18,16 +18,16 @@ MINOR_JOB_BOARDS = [
 ]
 
 BOARD_RATE_LIMITS: dict[str, dict[str, int]] = {
-    "naukri": {"min_delay_s": 3, "max_delay_s": 8, "max_jobs_per_run": 50},
-    "linkedin": {"min_delay_s": 8, "max_delay_s": 15, "max_jobs_per_run": 25},
-    "internshala": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 100},
-    "wellfound": {"min_delay_s": 2, "max_delay_s": 6, "max_jobs_per_run": 50},
-    "indeed": {"min_delay_s": 4, "max_delay_s": 10, "max_jobs_per_run": 30},
-    "glassdoor": {"min_delay_s": 5, "max_delay_s": 12, "max_jobs_per_run": 20},
-    "iimjobs": {"min_delay_s": 3, "max_delay_s": 7, "max_jobs_per_run": 50},
-    "hirist": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50},
-    "cutshort": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50},
-    "unstop": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50},
-    "hackernews": {"min_delay_s": 2, "max_delay_s": 4, "max_jobs_per_run": 50},
-    "default": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50},
+    "naukri": {"min_delay_s": 3, "max_delay_s": 8, "max_jobs_per_run": 50, "max_pages_per_run": 2, "max_detail_pages_per_run": 12},
+    "linkedin": {"min_delay_s": 8, "max_delay_s": 15, "max_jobs_per_run": 25, "max_pages_per_run": 1, "max_detail_pages_per_run": 6},
+    "internshala": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 100, "max_pages_per_run": 3, "max_detail_pages_per_run": 0},
+    "wellfound": {"min_delay_s": 2, "max_delay_s": 6, "max_jobs_per_run": 50, "max_pages_per_run": 2, "max_detail_pages_per_run": 10},
+    "indeed": {"min_delay_s": 4, "max_delay_s": 10, "max_jobs_per_run": 30, "max_pages_per_run": 2, "max_detail_pages_per_run": 8},
+    "glassdoor": {"min_delay_s": 5, "max_delay_s": 12, "max_jobs_per_run": 20, "max_pages_per_run": 2, "max_detail_pages_per_run": 6},
+    "iimjobs": {"min_delay_s": 3, "max_delay_s": 7, "max_jobs_per_run": 50, "max_pages_per_run": 3, "max_detail_pages_per_run": 0},
+    "hirist": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50, "max_pages_per_run": 3, "max_detail_pages_per_run": 0},
+    "cutshort": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50, "max_pages_per_run": 1, "max_detail_pages_per_run": 0},
+    "unstop": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50, "max_pages_per_run": 1, "max_detail_pages_per_run": 0},
+    "hackernews": {"min_delay_s": 2, "max_delay_s": 4, "max_jobs_per_run": 50, "max_pages_per_run": 1, "max_detail_pages_per_run": 0},
+    "default": {"min_delay_s": 2, "max_delay_s": 5, "max_jobs_per_run": 50, "max_pages_per_run": 2, "max_detail_pages_per_run": 8},
 }

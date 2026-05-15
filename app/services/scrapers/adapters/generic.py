@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 from pydantic import BaseModel, Field
 
 from app.services.llm import call_llm
-from app.services.scrapers.base import BaseJobAdapter, JobItem
-from app.services.scrapers.utils import clean_text, fetch_html_with_playwright, html_to_visible_text, json_ld_job_postings, limit_jobs_for_source, map_json_ld_to_job_item, normalise_work_types, rate_limit_delay
+from app.services.scrapers.base import BaseJobAdapter, CrawlResult, JobItem
+from app.services.scrapers.utils import (
+    absolutize_url,
+    clean_text,
+    crawl_limits_for_source,
+    extract_candidate_job_links,
+    extract_next_page_url,
+    fetch_html_with_playwright,
+    html_to_visible_text,
+    json_ld_job_postings,
+    limit_jobs_for_source,
+    map_json_ld_to_job_item,
+    normalise_work_types,
+    rate_limit_delay,
+    unique_urls,
+)
 
 
 class JobItemExtraction(BaseModel):
@@ -34,6 +50,73 @@ class GenericAdapter(BaseJobAdapter):
         await rate_limit_delay(self.source_name)
         html = await self._fetch_html(url)
         return limit_jobs_for_source(self.source_name, self.parse(html, url=url))
+
+    async def crawl_jobs(
+        self,
+        url: str,
+        keywords: list[str] | None = None,
+        cursor: dict[str, Any] | None = None,
+    ) -> CrawlResult:
+        del keywords
+        limits = crawl_limits_for_source(self.source_name)
+        next_page_url = clean_text((cursor or {}).get("next_page_url")) or url
+        pending_urls = unique_urls(list((cursor or {}).get("pending_detail_urls") or []))
+        jobs: list[JobItem] = []
+        pages_scanned = 0
+        detail_pages_scanned = 0
+
+        while pending_urls and detail_pages_scanned < limits["max_detail_pages_per_run"] and len(jobs) < limits["max_jobs_per_run"]:
+            detail_url = pending_urls.pop(0)
+            await rate_limit_delay(self.source_name)
+            detail_html = await self._fetch_html(detail_url)
+            detail_jobs = self.parse(detail_html, url=detail_url)
+            detail_pages_scanned += 1
+            jobs.extend(detail_jobs[:1])
+
+        while next_page_url and pages_scanned < limits["max_pages_per_run"] and len(jobs) < limits["max_jobs_per_run"]:
+            await rate_limit_delay(self.source_name)
+            page_html = await self._fetch_html(next_page_url)
+            page_jobs = self.parse(page_html, url=next_page_url)
+            jobs.extend(page_jobs)
+            pending_urls.extend(extract_candidate_job_links(page_html, next_page_url))
+            pending_urls = unique_urls(
+                [
+                    detail_url
+                    for detail_url in pending_urls
+                    if detail_url not in {job.source_url for job in jobs}
+                ]
+            )
+            pages_scanned += 1
+            next_page_url = extract_next_page_url(page_html, next_page_url)
+
+            while pending_urls and detail_pages_scanned < limits["max_detail_pages_per_run"] and len(jobs) < limits["max_jobs_per_run"]:
+                detail_url = pending_urls.pop(0)
+                await rate_limit_delay(self.source_name)
+                detail_html = await self._fetch_html(detail_url)
+                detail_jobs = self.parse(detail_html, url=detail_url)
+                detail_pages_scanned += 1
+                jobs.extend(detail_jobs[:1])
+
+        if not next_page_url and not pending_urls:
+            next_page_url = url
+
+        deduped_jobs: list[JobItem] = []
+        seen_urls: set[str] = set()
+        for job in jobs:
+            source_url = clean_text(job.source_url)
+            if not source_url or source_url in seen_urls:
+                continue
+            seen_urls.add(source_url)
+            job.source_url = absolutize_url(source_url, url)
+            deduped_jobs.append(job)
+
+        return CrawlResult(
+            jobs=limit_jobs_for_source(self.source_name, deduped_jobs),
+            next_page_url=next_page_url,
+            pending_detail_urls=pending_urls[: limits["max_jobs_per_run"]],
+            pages_scanned=pages_scanned,
+            detail_pages_scanned=detail_pages_scanned,
+        )
 
     def parse(self, html: str, url: str = "") -> list[JobItem]:
         jobs = [job for item in json_ld_job_postings(html) if (job := map_json_ld_to_job_item(item, default_url=url)) is not None]

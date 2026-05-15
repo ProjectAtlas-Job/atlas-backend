@@ -67,6 +67,10 @@ def limit_jobs_for_source(source_name: str, jobs: list[JobItem]) -> list[JobItem
     return jobs[: limits["max_jobs_per_run"]]
 
 
+def crawl_limits_for_source(source_name: str) -> dict[str, int]:
+    return BOARD_RATE_LIMITS.get(source_name, BOARD_RATE_LIMITS["default"])
+
+
 async def rate_limit_delay(source_name: str) -> None:
     limits = BOARD_RATE_LIMITS.get(source_name, BOARD_RATE_LIMITS["default"])
     delay = random.uniform(limits["min_delay_s"], limits["max_delay_s"])
@@ -211,8 +215,59 @@ def absolutize_url(url: str, base_url: str) -> str:
     return urljoin(base_url, url)
 
 
+def unique_urls(urls: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for url in urls:
+        cleaned = clean_text(url)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        ordered.append(cleaned)
+    return ordered
+
+
 def get_domain(url: str) -> str:
     return urlparse(url).netloc.lower()
+
+
+def extract_next_page_url(html: str, base_url: str) -> str | None:
+    soup = BeautifulSoup(html, "html.parser")
+    selectors = [
+        'a[rel="next"]',
+        'link[rel="next"]',
+        'a[aria-label*="Next"]',
+        'a[title*="Next"]',
+        'a[href*="page="]',
+    ]
+    for selector in selectors:
+        element = soup.select_one(selector)
+        if element is None:
+            continue
+        href = clean_text(element.get("href"))
+        if href:
+            return absolutize_url(href, base_url)
+
+    for anchor in soup.select("a[href]"):
+        text = clean_text(anchor.get_text(" ", strip=True)).lower()
+        href = clean_text(anchor.get("href"))
+        if href and text in {"next", "next >", "older", "more jobs"}:
+            return absolutize_url(href, base_url)
+    return None
+
+
+def extract_candidate_job_links(html: str, base_url: str) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    job_links: list[str] = []
+    for anchor in soup.select("a[href]"):
+        href = clean_text(anchor.get("href"))
+        if not href or href.startswith(("mailto:", "javascript:", "#")):
+            continue
+        lower_href = href.lower()
+        if not any(token in lower_href for token in ("/job", "/jobs", "job-listings", "careers", "opportunities")):
+            continue
+        job_links.append(absolutize_url(href, base_url))
+    return unique_urls(job_links)
 
 
 def parse_posted_at(value: str | None) -> datetime | None:

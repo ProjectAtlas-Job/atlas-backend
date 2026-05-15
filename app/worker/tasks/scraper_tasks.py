@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal
-from app.services.scrapers.service import persist_scraped_jobs, resolve_scraper_adapter, update_scrape_action_log
+from app.services.scrapers.service import load_scrape_cursor, persist_scraped_jobs, resolve_scraper_adapter, update_scrape_action_log
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,18 @@ async def scrape_job_board(
 
     async with AsyncSessionLocal() as session:
         try:
-            jobs = await adapter.fetch_jobs(url, keywords=keywords)
+            crawl_state = await load_scrape_cursor(
+                db=session,
+                source_type=source_type,
+                url=url,
+                user_id=user_id,
+            )
+            crawl_result = await adapter.crawl_jobs(
+                url,
+                keywords=keywords,
+                cursor=crawl_state,
+            )
+            jobs = crawl_result.jobs
             saved_count, skipped_count, new_job_ids = await persist_scraped_jobs(
                 db=session,
                 jobs=jobs,
@@ -47,6 +58,12 @@ async def scrape_job_board(
                     "keywords": keywords or [],
                     "saved_count": saved_count,
                     "skipped_count": skipped_count,
+                    "crawl_state": {
+                        "next_page_url": crawl_result.next_page_url,
+                        "pending_detail_urls": crawl_result.pending_detail_urls,
+                    },
+                    "pages_scanned": crawl_result.pages_scanned,
+                    "detail_pages_scanned": crawl_result.detail_pages_scanned,
                 },
             )
         except Exception as exc:

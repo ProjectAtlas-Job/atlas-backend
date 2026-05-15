@@ -183,6 +183,31 @@ def _action_log_meta(log: ActionLog) -> dict[str, Any]:
     return {}
 
 
+async def load_scrape_cursor(
+    *,
+    db: AsyncSession,
+    source_type: str,
+    url: str,
+    user_id: int | None = None,
+) -> dict[str, Any]:
+    statement = select(ActionLog).where(ActionLog.action_type == "scraper").order_by(
+        desc(ActionLog.created_at),
+        desc(ActionLog.id),
+    )
+    if user_id is not None:
+        statement = statement.where(ActionLog.user_id == user_id)
+
+    result = await db.execute(statement)
+    for log in result.scalars().all():
+        meta = _action_log_meta(log)
+        if meta.get("source_type") == source_type and meta.get("url") == url:
+            crawl_state = meta.get("crawl_state")
+            if isinstance(crawl_state, dict):
+                return crawl_state
+            break
+    return {}
+
+
 async def _find_scraper_action_log(
     *,
     db: AsyncSession,

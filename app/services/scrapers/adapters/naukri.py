@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from typing import Any
+
 from bs4 import BeautifulSoup
 
-from app.services.scrapers.base import BaseJobAdapter, JobItem
+from app.services.scrapers.base import BaseJobAdapter, CrawlResult, JobItem
 from app.services.scrapers.utils import (
     absolutize_url,
     clean_text,
+    crawl_limits_for_source,
+    extract_next_page_url,
     extract_experience_required,
     extract_location,
     fetch_html_with_playwright,
@@ -13,6 +17,7 @@ from app.services.scrapers.utils import (
     limit_jobs_for_source,
     map_json_ld_to_job_item,
     rate_limit_delay,
+    unique_urls,
 )
 
 
@@ -28,6 +33,57 @@ class NaukriAdapter(BaseJobAdapter):
         if not jobs:
             jobs = self._parse_search_results(html, base_url=url)
         return limit_jobs_for_source(self.source_name, jobs)
+
+    async def crawl_jobs(
+        self,
+        url: str,
+        keywords: list[str] | None = None,
+        cursor: dict[str, Any] | None = None,
+    ) -> CrawlResult:
+        del keywords
+        limits = crawl_limits_for_source(self.source_name)
+        next_page_url = clean_text((cursor or {}).get("next_page_url")) or url
+        pending_detail_urls = unique_urls(list((cursor or {}).get("pending_detail_urls") or []))
+        jobs: list[JobItem] = []
+        pages_scanned = 0
+        detail_pages_scanned = 0
+
+        while pending_detail_urls and detail_pages_scanned < limits["max_detail_pages_per_run"] and len(jobs) < limits["max_jobs_per_run"]:
+            detail_url = pending_detail_urls.pop(0)
+            await rate_limit_delay(self.source_name)
+            detail_html = await fetch_html_with_playwright(detail_url)
+            detail_jobs = self.parse(detail_html)
+            if detail_jobs:
+                jobs.append(detail_jobs[0])
+            detail_pages_scanned += 1
+
+        while next_page_url and pages_scanned < limits["max_pages_per_run"] and len(jobs) < limits["max_jobs_per_run"]:
+            await rate_limit_delay(self.source_name)
+            search_html = await fetch_html_with_playwright(next_page_url)
+            pending_detail_urls.extend(self._extract_listing_urls(search_html, next_page_url))
+            pending_detail_urls = unique_urls(pending_detail_urls)
+            pages_scanned += 1
+            next_page_url = extract_next_page_url(search_html, next_page_url)
+
+            while pending_detail_urls and detail_pages_scanned < limits["max_detail_pages_per_run"] and len(jobs) < limits["max_jobs_per_run"]:
+                detail_url = pending_detail_urls.pop(0)
+                await rate_limit_delay(self.source_name)
+                detail_html = await fetch_html_with_playwright(detail_url)
+                detail_jobs = self.parse(detail_html)
+                if detail_jobs:
+                    jobs.append(detail_jobs[0])
+                detail_pages_scanned += 1
+
+        if not next_page_url and not pending_detail_urls:
+            next_page_url = url
+
+        return CrawlResult(
+            jobs=limit_jobs_for_source(self.source_name, jobs),
+            next_page_url=next_page_url,
+            pending_detail_urls=pending_detail_urls[: limits["max_jobs_per_run"]],
+            pages_scanned=pages_scanned,
+            detail_pages_scanned=detail_pages_scanned,
+        )
 
     def parse(self, html: str) -> list[JobItem]:
         jobs: list[JobItem] = []
@@ -84,6 +140,15 @@ class NaukriAdapter(BaseJobAdapter):
                 )
             )
         return jobs
+
+    def _extract_listing_urls(self, html: str, base_url: str) -> list[str]:
+        soup = BeautifulSoup(html, "html.parser")
+        urls: list[str] = []
+        for anchor in soup.select("a[href*='job-listings'], a[href*='/job-listings/']"):
+            href = clean_text(anchor.get("href"))
+            if href:
+                urls.append(absolutize_url(href, base_url))
+        return unique_urls(urls)
 
     def _normalise_employment_type(self, raw: object) -> list[str]:
         values = raw if isinstance(raw, list) else [raw]

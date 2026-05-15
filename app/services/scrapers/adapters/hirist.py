@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from typing import Any
+
 from bs4 import BeautifulSoup
 
-from app.services.scrapers.base import BaseJobAdapter, JobItem
-from app.services.scrapers.utils import clean_text, fetch_html_with_playwright, limit_jobs_for_source, rate_limit_delay
+from app.services.scrapers.base import BaseJobAdapter, CrawlResult, JobItem
+from app.services.scrapers.utils import clean_text, crawl_limits_for_source, extract_next_page_url, fetch_html_with_playwright, limit_jobs_for_source, rate_limit_delay
 
 
 class HiristAdapter(BaseJobAdapter):
@@ -15,6 +17,33 @@ class HiristAdapter(BaseJobAdapter):
         await rate_limit_delay(self.source_name)
         html = await fetch_html_with_playwright(url)
         return limit_jobs_for_source(self.source_name, self.parse(html))
+
+    async def crawl_jobs(
+        self,
+        url: str,
+        keywords: list[str] | None = None,
+        cursor: dict[str, Any] | None = None,
+    ) -> CrawlResult:
+        del keywords
+        limits = crawl_limits_for_source(self.source_name)
+        next_page_url = clean_text((cursor or {}).get("next_page_url")) or url
+        jobs: list[JobItem] = []
+        pages_scanned = 0
+
+        while next_page_url and pages_scanned < limits["max_pages_per_run"] and len(jobs) < limits["max_jobs_per_run"]:
+            await rate_limit_delay(self.source_name)
+            html = await fetch_html_with_playwright(next_page_url)
+            jobs.extend(self.parse(html))
+            pages_scanned += 1
+            next_page_url = extract_next_page_url(html, next_page_url)
+
+        return CrawlResult(
+            jobs=limit_jobs_for_source(self.source_name, jobs),
+            next_page_url=next_page_url or url,
+            pending_detail_urls=[],
+            pages_scanned=pages_scanned,
+            detail_pages_scanned=0,
+        )
 
     def parse(self, html: str) -> list[JobItem]:
         soup = BeautifulSoup(html, "html.parser")
