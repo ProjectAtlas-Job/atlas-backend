@@ -42,6 +42,12 @@ class ScraperRunResponse(BaseModel):
     task_id: str
 
 
+class ScraperRunAllResponse(BaseModel):
+    status: Literal["queued"]
+    queued_count: int
+    sources: list[str]
+
+
 class ScraperStopResponse(BaseModel):
     cancelled: int
 

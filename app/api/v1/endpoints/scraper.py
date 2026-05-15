@@ -2,9 +2,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_arq_pool, get_current_active_user, get_db
+from app.core.constants import MAJOR_JOB_BOARDS, MINOR_JOB_BOARDS
 from app.core.rate_limiter import limiter, rate_limit_key
 from app.db.models.user import User
-from app.schemas.scraper import ScraperRunRequest, ScraperRunResponse, ScraperStatusItem, ScraperStopResponse
+from app.schemas.scraper import (
+    ScraperRunAllResponse,
+    ScraperRunRequest,
+    ScraperRunResponse,
+    ScraperStatusItem,
+    ScraperStopResponse,
+)
 from app.services.scrapers.service import cancel_scraper_jobs, enqueue_scrape_job, list_running_scraper_jobs
 
 router = APIRouter(prefix="/scraper", tags=["scraper"])
@@ -36,6 +43,35 @@ async def run_scraper(
         keywords=payload.keywords,
     )
     return ScraperRunResponse(task_id=task_id)
+
+
+@router.post("/run-all", response_model=ScraperRunAllResponse, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("1/minute", key_func=rate_limit_key)
+async def run_all_scrapers(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    arq_pool: object = Depends(get_arq_pool),
+) -> ScraperRunAllResponse:
+    del request
+
+    boards = MAJOR_JOB_BOARDS + MINOR_JOB_BOARDS
+    sources: list[str] = []
+    for board in boards:
+        await enqueue_scrape_job(
+            arq_pool=arq_pool,
+            db=db,
+            current_user=current_user,
+            url=board["url"],
+            source_type=board["source_type"],
+        )
+        sources.append(board["source_type"])
+
+    return ScraperRunAllResponse(
+        status="queued",
+        queued_count=len(boards),
+        sources=sources,
+    )
 
 
 @router.post("/stop", response_model=ScraperStopResponse)
