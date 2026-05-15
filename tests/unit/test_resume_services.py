@@ -90,6 +90,8 @@ def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
             self.embedding = None
             self.structural_score = None
             self.semantic_score = None
+            self.parsed_json = None
+            self.ats_score = None
 
     resume = FakeResume()
 
@@ -127,6 +129,29 @@ def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
     monkeypatch.setattr(worker_resume, "embed", lambda text: [0.1, 0.2])
     monkeypatch.setattr(worker_resume, "structural_score", lambda text: 0.75)
     monkeypatch.setattr(worker_resume, "semantic_score", lambda text, embedding: 0.5)
+    monkeypatch.setattr(worker_resume, "get_user_settings_for_resume", lambda session, resume_id: asyncio.sleep(0, result=object()))
+    monkeypatch.setattr(
+        worker_resume,
+        "enrich_resume_with_llm",
+        lambda raw_text, user_settings: asyncio.sleep(
+            0,
+            result=type(
+                "LLMOutput",
+                (),
+                {
+                    "ats_score": 82.0,
+                    "model_dump": lambda self, exclude=None: {
+                        "skills": ["python"],
+                        "recent_role": "Engineer at Atlas",
+                        "education": "B.Tech",
+                        "top_projects": ["Atlas"],
+                        "certifications": [],
+                        "experience_years": 2,
+                    },
+                },
+            )(),
+        ),
+    )
     refreshed: list[int] = []
 
     async def fake_refresh_profile_completeness(session, *, user_id: int):
@@ -142,6 +167,8 @@ def test_process_resume_persists_pipeline_outputs(monkeypatch) -> None:
     assert resume.embedding == [0.1, 0.2]
     assert resume.structural_score == 0.75
     assert resume.semantic_score == 0.5
+    assert resume.parsed_json is not None
+    assert resume.ats_score == 82.0
     assert refreshed == [12]
     assert fake_session.commit_count == 2
     assert result == {"resume_id": 7, "status": "completed"}
@@ -160,6 +187,8 @@ def test_process_resume_uses_filename_extension(monkeypatch) -> None:
             self.embedding = None
             self.structural_score = None
             self.semantic_score = None
+            self.parsed_json = None
+            self.ats_score = None
 
     resume = FakeResume()
     formats: list[str] = []
@@ -193,6 +222,29 @@ def test_process_resume_uses_filename_extension(monkeypatch) -> None:
     monkeypatch.setattr(worker_resume, "embed", lambda text: [0.3, 0.4])
     monkeypatch.setattr(worker_resume, "structural_score", lambda text: 0.25)
     monkeypatch.setattr(worker_resume, "semantic_score", lambda text, embedding: 0.9)
+    monkeypatch.setattr(worker_resume, "get_user_settings_for_resume", lambda session, resume_id: asyncio.sleep(0, result=object()))
+    monkeypatch.setattr(
+        worker_resume,
+        "enrich_resume_with_llm",
+        lambda raw_text, user_settings: asyncio.sleep(
+            0,
+            result=type(
+                "LLMOutput",
+                (),
+                {
+                    "ats_score": 74.0,
+                    "model_dump": lambda self, exclude=None: {
+                        "skills": ["python"],
+                        "recent_role": "Engineer",
+                        "education": "B.Tech",
+                        "top_projects": [],
+                        "certifications": [],
+                        "experience_years": 1,
+                    },
+                },
+            )(),
+        ),
+    )
     monkeypatch.setattr(worker_resume, "refresh_profile_completeness", lambda session, *, user_id: asyncio.sleep(0))
 
     result = asyncio.run(process_resume({}, resume_id=9, file_bytes=b"%PDF", filename="test.pdf"))
@@ -201,4 +253,72 @@ def test_process_resume_uses_filename_extension(monkeypatch) -> None:
     assert resume.status == "completed"
     assert resume.structural_score is not None
     assert resume.semantic_score is not None
+    assert resume.parsed_json is not None
+    assert resume.ats_score == 74.0
     assert result == {"resume_id": 9, "status": "completed"}
+
+
+def test_process_resume_completes_when_llm_enrichment_fails(monkeypatch) -> None:
+    import app.worker.tasks.resume_tasks as worker_resume
+
+    class FakeResume:
+        def __init__(self) -> None:
+            self.id = 14
+            self.user_id = 5
+            self.status = "pending"
+            self.updated_at = None
+            self.raw_text = None
+            self.embedding = None
+            self.structural_score = None
+            self.semantic_score = None
+            self.parsed_json = "stale"
+            self.ats_score = 10.0
+
+    resume = FakeResume()
+    warnings: list[str] = []
+
+    class FakeResult:
+        def scalar_one_or_none(self) -> FakeResume:
+            return resume
+
+    class FakeSession:
+        async def __aenter__(self) -> "FakeSession":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def execute(self, query) -> FakeResult:
+            return FakeResult()
+
+        async def commit(self) -> None:
+            return None
+
+        async def flush(self) -> None:
+            return None
+
+        async def rollback(self) -> None:
+            raise AssertionError("rollback should not be called when LLM enrichment fails")
+
+    monkeypatch.setattr(worker_resume, "AsyncSessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(worker_resume, "extract_text", lambda file_bytes, format: "raw")
+    monkeypatch.setattr(worker_resume, "normalise_text", lambda raw: "normalized")
+    monkeypatch.setattr(worker_resume, "embed", lambda text: [0.3, 0.4])
+    monkeypatch.setattr(worker_resume, "structural_score", lambda text: 0.25)
+    monkeypatch.setattr(worker_resume, "semantic_score", lambda text, embedding: 0.9)
+    monkeypatch.setattr(worker_resume, "get_user_settings_for_resume", lambda session, resume_id: asyncio.sleep(0, result=object()))
+
+    async def failing_enrichment(raw_text, user_settings):
+        raise RuntimeError("llm unavailable")
+
+    monkeypatch.setattr(worker_resume, "enrich_resume_with_llm", failing_enrichment)
+    monkeypatch.setattr(worker_resume, "refresh_profile_completeness", lambda session, *, user_id: asyncio.sleep(0))
+    monkeypatch.setattr(worker_resume.logger, "warning", lambda message, *args: warnings.append(message.format(*args)))
+
+    result = asyncio.run(process_resume({}, resume_id=14, file_bytes=b"raw", filename="resume.txt"))
+
+    assert resume.status == "completed"
+    assert resume.parsed_json is None
+    assert resume.ats_score is None
+    assert warnings
+    assert result == {"resume_id": 14, "status": "completed"}
