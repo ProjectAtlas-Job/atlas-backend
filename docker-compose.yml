@@ -22,6 +22,11 @@ services:
     <<: *backend-image
     command: arq app.worker.arq_worker.WorkerSettings
     restart: unless-stopped
+    mem_limit: 400m
+    deploy:
+      resources:
+        limits:
+          memory: 400M
 
   redis:
     image: redis:7-alpine

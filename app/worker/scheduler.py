@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -21,6 +22,7 @@ class ArqPoolProtocol(Protocol):
     async def enqueue_job(self, name: str, **kwargs: object) -> None: ...
 
 
+logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler(timezone=UTC)
 _arq_pool: ArqPoolProtocol | None = None
 
@@ -37,6 +39,7 @@ def clear_arq_pool() -> None:
 
 async def _enqueue_scrape_job(*, url: str, source_type: str, user_id: int | None = None) -> None:
     if _arq_pool is None:
+        logger.warning("[CRON] skipped enqueue for %s because ARQ pool is not bound", source_type)
         return
 
     payload: dict[str, Any] = {"url": url, "source_type": source_type}
@@ -47,12 +50,14 @@ async def _enqueue_scrape_job(*, url: str, source_type: str, user_id: int | None
 
 @scheduler.scheduled_job("interval", hours=4, id="scrape_major_boards")
 async def scrape_major_boards() -> None:
+    logger.info("[CRON] scrape_major_boards fired at %s", datetime.now(UTC).isoformat())
     for board in MAJOR_JOB_BOARDS:
         await _enqueue_scrape_job(url=board["url"], source_type=board["source_type"])
 
 
 @scheduler.scheduled_job("interval", hours=12, id="scrape_minor_boards")
 async def scrape_minor_boards() -> None:
+    logger.info("[CRON] scrape_minor_boards fired at %s", datetime.now(UTC).isoformat())
     for board in MINOR_JOB_BOARDS:
         await _enqueue_scrape_job(url=board["url"], source_type=board["source_type"])
 
@@ -61,6 +66,7 @@ async def scrape_minor_boards() -> None:
 async def user_configured_scraping() -> None:
     if _arq_pool is None:
         return
+    logger.info("[CRON] user_configured_scraping fired at %s", datetime.now(UTC).isoformat())
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(UserSettings))

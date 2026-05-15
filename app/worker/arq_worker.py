@@ -9,7 +9,7 @@ class WorkerSettings:
     functions = [process_resume, scrape_job_board]
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
     max_jobs = 10
-    job_timeout = 300
+    job_timeout = 600
 
 
 if __name__ == "__main__":

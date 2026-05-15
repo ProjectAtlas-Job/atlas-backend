@@ -6,11 +6,12 @@ from typing import Any
 from uuid import uuid4
 
 from arq.jobs import Job
-from sqlalchemy import desc, select, text
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.action_log import ActionLog
+from app.db.models.company import Company
 from app.db.models.job_posting import JobPosting
 from app.db.models.user import User
 from app.db.models.user_job_save import UserJobSave
@@ -72,9 +73,10 @@ async def persist_scraped_jobs(
     jobs: list[JobItem],
     source_type: str,
     user_id: int | None = None,
-) -> tuple[int, int]:
+) -> tuple[int, int, list[int]]:
     saved_count = 0
     skipped_count = 0
+    new_job_ids: list[int] = []
 
     for job_item in jobs:
         if not job_item.source_url or not job_item.title or not job_item.company:
@@ -88,6 +90,7 @@ async def persist_scraped_jobs(
         )
         if inserted:
             saved_count += 1
+            new_job_ids.append(posting.id)
 
         if user_id is not None:
             save_result = await db.execute(
@@ -101,7 +104,7 @@ async def persist_scraped_jobs(
                 db.add(UserJobSave(user_id=user_id, job_id=posting.id))
 
     await db.commit()
-    return saved_count, skipped_count
+    return saved_count, skipped_count, new_job_ids
 
 
 async def update_scrape_action_log(
@@ -203,6 +206,38 @@ async def _find_scraper_action_log(
     return logs[0] if logs else None
 
 
+async def resolve_company_id(db: AsyncSession, company_name_raw: str) -> int | None:
+    normalized = clean_text(company_name_raw).lower()
+    if not normalized:
+        return None
+    result = await db.execute(
+        select(Company.id)
+        .where(func.lower(Company.name) == normalized)
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_company_stub(db: AsyncSession, company_name: str) -> int | None:
+    normalized = clean_text(company_name)
+    if not normalized:
+        return None
+
+    existing_id = await resolve_company_id(db, normalized)
+    if existing_id is not None:
+        return existing_id
+
+    db.add(
+        Company(
+            name=normalized,
+            is_verified=False,
+            last_enriched_at=None,
+        )
+    )
+    await db.flush()
+    return await resolve_company_id(db, normalized)
+
+
 async def _upsert_job_posting(
     *,
     db: AsyncSession,
@@ -211,12 +246,15 @@ async def _upsert_job_posting(
 ) -> tuple[JobPosting, bool]:
     source = clean_text(source_type) or "scraper"
     now = datetime.now(UTC)
+    company_id = await resolve_company_id(db, job_item.company)
+    if company_id is None:
+        company_id = await upsert_company_stub(db, job_item.company)
     embedding = await asyncio.to_thread(
         embed,
         f"{job_item.title} {job_item.company} {job_item.description[:2000]}",
     )
     values = {
-        "company_id": None,
+        "company_id": company_id,
         "company_name_raw": job_item.company,
         "title": job_item.title,
         "description": job_item.description,
@@ -224,8 +262,8 @@ async def _upsert_job_posting(
         "work_type": job_item.work_type,
         "salary_min": job_item.salary_min,
         "salary_max": job_item.salary_max,
-        "experience_required": None,
-        "skills_required": None,
+        "experience_required": clean_text(job_item.experience_required) or None,
+        "skills_required": [],
         "source": source,
         "source_url": job_item.source_url,
         "embedding": embedding,
@@ -247,6 +285,11 @@ async def _upsert_job_posting(
                 "work_type": insert_stmt.excluded.work_type,
                 "salary_min": insert_stmt.excluded.salary_min,
                 "salary_max": insert_stmt.excluded.salary_max,
+                "experience_required": func.coalesce(
+                    insert_stmt.excluded.experience_required,
+                    JobPosting.experience_required,
+                ),
+                "company_id": func.coalesce(insert_stmt.excluded.company_id, JobPosting.company_id),
                 "source": insert_stmt.excluded.source,
                 "embedding": insert_stmt.excluded.embedding,
                 "is_active": True,
@@ -273,6 +316,8 @@ async def _upsert_job_posting(
         posting.work_type = job_item.work_type
         posting.salary_min = job_item.salary_min
         posting.salary_max = job_item.salary_max
+        posting.experience_required = clean_text(job_item.experience_required) or posting.experience_required
+        posting.company_id = company_id
         posting.source = source
         posting.embedding = embedding
         posting.is_active = True

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
-from playwright.async_api import async_playwright
+from bs4 import BeautifulSoup
 
 from app.services.scrapers.base import BaseJobAdapter, JobItem
-from app.services.scrapers.utils import absolutize_url, clean_text, json_ld_job_postings, map_json_ld_to_job_item, normalise_work_types
+from app.services.scrapers.utils import (
+    absolutize_url,
+    clean_text,
+    extract_experience_required,
+    extract_location,
+    fetch_html_with_playwright,
+    json_ld_job_postings,
+    limit_jobs_for_source,
+    map_json_ld_to_job_item,
+    rate_limit_delay,
+)
 
 
 class NaukriAdapter(BaseJobAdapter):
@@ -14,39 +22,44 @@ class NaukriAdapter(BaseJobAdapter):
 
     async def fetch_jobs(self, url: str, keywords: list[str] | None = None) -> list[JobItem]:
         del keywords
-        html = await self._fetch_page_content(url)
-        if self._is_listing_url(url):
-            return self.parse(html)
-        return self._parse_search_results(html, base_url=url)
+        await rate_limit_delay(self.source_name)
+        html = await fetch_html_with_playwright(url)
+        jobs = self.parse(html)
+        if not jobs:
+            jobs = self._parse_search_results(html, base_url=url)
+        return limit_jobs_for_source(self.source_name, jobs)
 
     def parse(self, html: str) -> list[JobItem]:
         jobs: list[JobItem] = []
         for item in json_ld_job_postings(html):
-            job = map_json_ld_to_job_item(item)
-            if job is None:
-                continue
-            job.work_type = normalise_work_types(item.get("employmentType"))
-            jobs.append(job)
+            job = self._parse_json_ld_job(item)
+            if job is not None:
+                jobs.append(job)
         return jobs
 
-    async def _fetch_page_content(self, url: str) -> str:
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
-            page = await browser.new_page()
-            try:
-                await page.goto(url, wait_until="networkidle", timeout=30000)
-                return await page.content()
-            finally:
-                await browser.close()
+    def _parse_json_ld_job(self, item: dict) -> JobItem | None:
+        job = map_json_ld_to_job_item(item)
+        if job is None:
+            return None
+
+        salary_min = self._salary_bound(item.get("baseSalary", {}), prefer="minValue")
+        salary_max = self._salary_bound(item.get("baseSalary", {}), prefer="maxValue")
+        if salary_min is not None:
+            job.salary_min = salary_min
+        if salary_max is not None:
+            job.salary_max = salary_max
+        job.location = extract_location(item.get("jobLocation"))
+        job.work_type = self._normalise_employment_type(item.get("employmentType"))
+        job.experience_required = extract_experience_required(item)
+        job.description = BeautifulSoup(item.get("description", ""), "html.parser").get_text(" ", strip=True)[:5000]
+        return job
 
     def _parse_search_results(self, html: str, *, base_url: str) -> list[JobItem]:
-        from bs4 import BeautifulSoup
-
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[JobItem] = []
         seen_urls: set[str] = set()
         for anchor in soup.select("a[href*='job-listings'], a[href*='/job-listings/']"):
-            href = anchor.get("href")
+            href = clean_text(anchor.get("href"))
             if not href:
                 continue
             source_url = absolutize_url(href, base_url)
@@ -62,15 +75,49 @@ class NaukriAdapter(BaseJobAdapter):
                     company=clean_text(anchor.get("data-company")) or "Unknown company",
                     location=clean_text(anchor.get("data-location")) or None,
                     description=title,
-                    work_type=[],
+                    work_type=["full_time"],
                     source_url=source_url,
                     posted_at=None,
                     salary_min=None,
                     salary_max=None,
+                    experience_required=None,
                 )
             )
         return jobs
 
-    def _is_listing_url(self, url: str) -> bool:
-        path = urlparse(url).path.lower()
-        return "job-listings" in path or path.count("/") > 2
+    def _normalise_employment_type(self, raw: object) -> list[str]:
+        values = raw if isinstance(raw, list) else [raw]
+        mapping = {
+            "FULL_TIME": "full_time",
+            "Full-time": "full_time",
+            "Permanent": "full_time",
+            "PART_TIME": "part_time",
+            "Part-time": "part_time",
+            "CONTRACTOR": "contract",
+            "Contract": "contract",
+            "Freelance": "freelance",
+            "INTERN": "internship",
+            "Internship": "internship",
+        }
+        normalized: list[str] = []
+        for value in values:
+            key = clean_text(str(value))
+            if not key:
+                continue
+            mapped = mapping.get(key)
+            if mapped and mapped not in normalized:
+                normalized.append(mapped)
+        return normalized or ["full_time"]
+
+    def _salary_bound(self, base_salary: dict, *, prefer: str) -> int | None:
+        if not isinstance(base_salary, dict):
+            return None
+        value = base_salary.get("value", {})
+        if isinstance(value, dict):
+            raw = value.get(prefer) or value.get("value")
+        else:
+            raw = value
+        try:
+            return int(float(raw)) if raw is not None else None
+        except (TypeError, ValueError):
+            return None

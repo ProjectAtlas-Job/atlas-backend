@@ -15,6 +15,7 @@ class JobItem:
     posted_at: str | None
     salary_min: int | None
     salary_max: int | None
+    experience_required: str | None = None
 
 
 class BaseJobAdapter(ABC):

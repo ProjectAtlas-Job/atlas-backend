@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import re
-
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
 
 from app.services.scrapers.base import BaseJobAdapter, JobItem
-from app.services.scrapers.utils import absolutize_url, clean_text
+from app.services.scrapers.utils import (
+    clean_text,
+    fetch_html_with_playwright,
+    limit_jobs_for_source,
+    parse_compensation_text,
+    rate_limit_delay,
+)
 
 
 class InternshalaAdapter(BaseJobAdapter):
@@ -15,80 +18,47 @@ class InternshalaAdapter(BaseJobAdapter):
 
     async def fetch_jobs(self, url: str, keywords: list[str] | None = None) -> list[JobItem]:
         del keywords
-        html = await self._fetch_page_content(url)
-        return self.parse(html)
+        await rate_limit_delay(self.source_name)
+        html = await fetch_html_with_playwright(url)
+        return limit_jobs_for_source(self.source_name, self.parse(html))
 
     def parse(self, html: str) -> list[JobItem]:
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[JobItem] = []
-        for card in soup.select(".individual_internship, .internship_meta"):
-            container = card if "individual_internship" in (card.get("class") or []) else card.parent
-            if container is None:
-                continue
-            title_tag = container.select_one(".job-title-href, .profile a")
-            company_tag = container.select_one(".company_name .company-name, .company_name, .company-name")
-            location_tags = container.select(".locations a, .location_link, .location_names a")
-            description_tag = container.select_one(".about_job .text, .internship_other_details_container")
+        containers = soup.select(".individual_internship") or soup.select(".internship_meta")
 
-            title = clean_text(title_tag.get_text(" ", strip=True) if title_tag else "")
-            company = clean_text(company_tag.get_text(" ", strip=True) if company_tag else "")
-            source_href = ""
-            if title_tag and title_tag.get("href"):
-                source_href = str(title_tag["href"])
-            elif container.get("data-href"):
-                source_href = str(container["data-href"])
-            source_url = absolutize_url(source_href, "https://internshala.com")
-            if not title or not company or not source_href:
+        for container in containers:
+            title_el = container.select_one(".profile a") or container.select_one("h3 a") or container.select_one(".job-title-href")
+            company_el = container.select_one(".company_name a") or container.select_one(".company_name") or container.select_one(".company-name")
+            location_el = container.select_one(".location_link") or container.select_one(".location span")
+            stipend_el = container.select_one(".stipend") or container.select_one(".salary")
+            duration_el = container.select_one(".other_detail_item span")
+            link_el = title_el or container.select_one("a[href]")
+
+            title = clean_text(title_el.get_text(strip=True) if title_el else "")
+            company = clean_text(company_el.get_text(strip=True) if company_el else "")
+            if not title or not company:
                 continue
 
-            location = ", ".join(
-                clean_text(tag.get_text(" ", strip=True))
-                for tag in location_tags
-                if clean_text(tag.get_text(" ", strip=True))
-            ) or None
-            description = clean_text(description_tag.get_text(" ", strip=True) if description_tag else "")
-            if not description:
-                description = title
+            source_url = clean_text(link_el.get("href") if link_el else "")
+            if source_url and not source_url.startswith("http"):
+                source_url = f"https://internshala.com{source_url}"
 
-            salary_text = clean_text(container.select_one(".stipend").get_text(" ", strip=True) if container.select_one(".stipend") else "")
-            salary_min, salary_max = self._parse_monthly_stipend(salary_text)
+            stipend_text = clean_text(stipend_el.get_text(strip=True) if stipend_el else "")
+            salary_min, salary_max = parse_compensation_text(stipend_text, annualize_monthly=True)
 
-            posted_text = clean_text(
-                container.select_one(".status-inactive span").get_text(" ", strip=True)
-                if container.select_one(".status-inactive span")
-                else ""
-            )
             jobs.append(
                 JobItem(
                     title=title,
                     company=company,
-                    location=location,
-                    description=description,
+                    location=clean_text(location_el.get_text(strip=True) if location_el else "") or "Remote",
+                    description=container.get_text(" ", strip=True)[:2000],
                     work_type=["internship"],
                     source_url=source_url,
-                    posted_at=posted_text or None,
+                    posted_at=None,
                     salary_min=salary_min,
                     salary_max=salary_max,
+                    experience_required=clean_text(duration_el.get_text(strip=True) if duration_el else "") or None,
                 )
             )
         return jobs
-
-    async def _fetch_page_content(self, url: str) -> str:
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
-            page = await browser.new_page()
-            try:
-                await page.goto(url, wait_until="networkidle", timeout=30000)
-                return await page.content()
-            finally:
-                await browser.close()
-
-    def _parse_monthly_stipend(self, stipend_text: str) -> tuple[int | None, int | None]:
-        sanitized = stipend_text.replace("/month", "").replace("per month", "")
-        matches = [int(value.replace(",", "")) for value in re.findall(r"([\d,]+)", sanitized)]
-        if len(matches) >= 2:
-            return matches[0] * 12, matches[1] * 12
-        if len(matches) == 1:
-            yearly = matches[0] * 12
-            return yearly, yearly
-        return None, None

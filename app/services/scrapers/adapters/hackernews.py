@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+import re
 
 import httpx
+from bs4 import BeautifulSoup
 
 from app.services.scrapers.base import BaseJobAdapter, JobItem
-from app.services.scrapers.utils import clean_text, strip_tags
-
-
-SEARCH_URL = "https://hn.algolia.com/api/v1/search?query=who+is+hiring&tags=ask_hn&hitsPerPage=100"
+from app.services.scrapers.utils import clean_text, limit_jobs_for_source, rate_limit_delay
 
 
 class HackerNewsAdapter(BaseJobAdapter):
@@ -16,72 +14,63 @@ class HackerNewsAdapter(BaseJobAdapter):
     domains = ["hn.algolia.com", "news.ycombinator.com"]
 
     async def fetch_jobs(self, url: str, keywords: list[str] | None = None) -> list[JobItem]:
-        del keywords
+        del url, keywords
+        await rate_limit_delay(self.source_name)
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url or SEARCH_URL)
-            response.raise_for_status()
-            payload = response.json()
-            hits = payload.get("hits", [])
-            story_id = self._latest_story_id(hits)
-            if story_id is None:
-                return [self._map_story_hit(hit) for hit in hits if self._map_story_hit(hit) is not None]
+            search_response = await client.get(
+                "https://hn.algolia.com/api/v1/search",
+                params={"query": "who is hiring", "tags": "ask_hn", "hitsPerPage": 1},
+            )
+            search_response.raise_for_status()
+            search_data = search_response.json()
+            hits = search_data.get("hits", [])
+            if not hits:
+                return []
 
+            post_id = hits[0]["objectID"]
             comments_response = await client.get(
-                f"https://hn.algolia.com/api/v1/search_by_date?tags=comment,story_{story_id}&hitsPerPage=500"
+                "https://hn.algolia.com/api/v1/search",
+                params={"tags": f"comment,story_{post_id}", "hitsPerPage": 100},
             )
             comments_response.raise_for_status()
-            comment_hits = comments_response.json().get("hits", [])
-        return [job for hit in comment_hits if (job := self._map_comment_hit(hit)) is not None]
+            comments = comments_response.json().get("hits", [])
+
+        jobs = []
+        for comment in comments:
+            text = comment.get("comment_text", "") or comment.get("title", "")
+            if not text or len(text) < 50:
+                continue
+            parsed = self._parse_hn_comment(text, comment["objectID"], comment.get("created_at"))
+            if parsed:
+                jobs.append(parsed)
+        return limit_jobs_for_source(self.source_name, jobs)
 
     def parse(self, html: str) -> list[JobItem]:
         del html
         return []
 
-    def _latest_story_id(self, hits: list[dict[str, Any]]) -> int | None:
-        story_ids = [hit.get("story_id") or hit.get("objectID") for hit in hits if "story" in hit.get("_tags", [])]
-        if not story_ids:
+    def _parse_hn_comment(self, text: str, comment_id: str, posted_at: str | None) -> JobItem | None:
+        clean_text_value = BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
+        if not clean_text_value:
             return None
-        return int(max(int(story_id) for story_id in story_ids))
 
-    def _map_comment_hit(self, hit: dict[str, Any]) -> JobItem | None:
-        raw_text = strip_tags(hit.get("comment_text") or "")
-        if not raw_text:
-            return None
-        company, title = self._extract_company_and_title(raw_text)
+        pipe_parts = [part.strip() for part in clean_text_value.split("|")]
+        company = pipe_parts[0] if pipe_parts else "Unknown"
+        company = re.sub(r"\s*\(.*?\)", "", company).strip() or "Unknown"
+        title = pipe_parts[1] if len(pipe_parts) > 1 else "Software Engineer"
+        location = pipe_parts[2] if len(pipe_parts) > 2 else None
+
+        work_type = ["full_time"]
+
         return JobItem(
-            title=title or "Who's Hiring",
-            company=company or "Unknown company",
-            location=None,
-            description=clean_text(raw_text),
-            work_type=[],
-            source_url=f"https://news.ycombinator.com/item?id={hit['objectID']}",
-            posted_at=hit.get("created_at"),
+            title=clean_text(title)[:200] or "Software Engineer",
+            company=clean_text(company)[:200] or "Unknown",
+            location=clean_text(location) or None,
+            description=clean_text(clean_text_value)[:3000],
+            work_type=work_type,
+            source_url=f"https://news.ycombinator.com/item?id={comment_id}",
+            posted_at=posted_at,
             salary_min=None,
             salary_max=None,
+            experience_required=None,
         )
-
-    def _map_story_hit(self, hit: dict[str, Any]) -> JobItem | None:
-        title = clean_text(hit.get("title"))
-        if not title:
-            return None
-        return JobItem(
-            title=title,
-            company="Hacker News",
-            location=None,
-            description=clean_text(strip_tags(hit.get("story_text") or "")) or title,
-            work_type=[],
-            source_url=f"https://news.ycombinator.com/item?id={hit['objectID']}",
-            posted_at=hit.get("created_at"),
-            salary_min=None,
-            salary_max=None,
-        )
-
-    def _extract_company_and_title(self, text: str) -> tuple[str | None, str | None]:
-        first_line = clean_text(text.splitlines()[0] if text.splitlines() else text)
-        if " is hiring" in first_line.lower():
-            company, _, remainder = first_line.partition(" is hiring")
-            return clean_text(company), clean_text(remainder.lstrip(": -")) or None
-        if ":" in first_line:
-            company, _, title = first_line.partition(":")
-            return clean_text(company), clean_text(title)
-        return None, first_line or None

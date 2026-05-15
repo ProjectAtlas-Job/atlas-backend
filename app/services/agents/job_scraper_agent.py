@@ -3,19 +3,15 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any, TypedDict
 
-from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from playwright.async_api import async_playwright
-
 from app.db.session import AsyncSessionLocal
 from app.services.llm import call_llm
-from app.services.scrapers import get_adapter_for_domain, get_adapter_for_source
+from app.services.scrapers import get_adapter_for_source, get_adapter_for_url
 from app.services.scrapers.adapters.generic import JobListExtraction
 from app.services.scrapers.base import JobItem
 from app.services.scrapers.service import persist_scraped_jobs, update_scrape_action_log
 from app.services.scrapers.utils import (
     clean_text,
-    get_domain,
+    fetch_html_with_playwright,
     html_to_visible_text,
     json_ld_job_postings,
     map_json_ld_to_job_item,
@@ -28,6 +24,7 @@ class JobScraperState(TypedDict):
     raw_html: str | None
     parsed_jobs: list[dict[str, Any]]
     saved_count: int
+    new_job_ids: list[int]
     task_id: str | None
     user_id: int | None
     error: str | None
@@ -35,17 +32,10 @@ class JobScraperState(TypedDict):
 
 async def fetch_page(state: JobScraperState) -> JobScraperState:
     try:
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
-            page = await browser.new_page()
-            try:
-                await page.goto(state["url"], wait_until="networkidle", timeout=30000)
-                state["raw_html"] = await page.content()
-                state["error"] = None
-            finally:
-                await browser.close()
-    except (PlaywrightTimeoutError, PlaywrightError) as exc:
-        state["error"] = f"Failed to fetch page: {exc}"
+        state["raw_html"] = await fetch_html_with_playwright(state["url"])
+        state["error"] = None
+    except Exception as exc:
+        state["error"] = f"fetch_page failed: {exc}"
         state["raw_html"] = None
     return state
 
@@ -68,18 +58,12 @@ async def try_json_ld(state: JobScraperState) -> JobScraperState:
 
 
 async def site_specific_parse(state: JobScraperState) -> JobScraperState:
-    domain = get_domain(state["url"])
-    adapter = get_adapter_for_domain(domain)
-    if adapter is None:
+    adapter = get_adapter_for_url(state["url"])
+    if adapter.source_name == "scraper":
         source_hint = clean_text(state.get("source_type", "")).lower()
-        if source_hint:
-            adapter = get_adapter_for_source(source_hint)
-    if adapter is None:
-        state["error"] = f"No adapter available for domain '{domain}'."
-        state["parsed_jobs"] = []
-        return state
-    if adapter.source_name == "hackernews":
-        state["error"] = "HackerNews URLs must be handled by the REST adapter via fetch_jobs()."
+        adapter = get_adapter_for_source(source_hint) if source_hint else adapter
+    if adapter.source_name in {"hackernews", "cutshort", "unstop"}:
+        state["error"] = f"{adapter.source_name} must be handled by adapter.fetch_jobs() instead of the HTML agent route."
         state["parsed_jobs"] = []
         return state
 
@@ -113,6 +97,7 @@ async def ai_extraction(state: JobScraperState) -> JobScraperState:
                     posted_at=clean_text(job.posted_at) or None,
                     salary_min=job.salary_min,
                     salary_max=job.salary_max,
+                    experience_required=clean_text(job.experience_required) or None,
                 )
             )
         )
@@ -124,7 +109,7 @@ async def embed_and_save(state: JobScraperState) -> JobScraperState:
     parsed_jobs = [job_item_from_dict(payload) for payload in state.get("parsed_jobs", [])]
 
     async with AsyncSessionLocal() as session:
-        saved_count, skipped_count = await persist_scraped_jobs(
+        saved_count, skipped_count, new_job_ids = await persist_scraped_jobs(
             db=session,
             jobs=parsed_jobs,
             source_type=clean_text(state.get("source_type")) or "scraper",
@@ -146,6 +131,7 @@ async def embed_and_save(state: JobScraperState) -> JobScraperState:
         )
 
     state["saved_count"] = saved_count
+    state["new_job_ids"] = new_job_ids
     return state
 
 
@@ -173,18 +159,17 @@ def route_after_fetch(state: JobScraperState) -> str:
 
 
 def route_by_source(state: JobScraperState) -> str:
-    domain = get_domain(state["url"])
-    adapter = get_adapter_for_domain(domain)
-    if adapter is None:
+    adapter = get_adapter_for_url(state["url"])
+    if adapter.source_name == "scraper":
         source_hint = clean_text(state.get("source_type", "")).lower()
         if source_hint:
             hinted = get_adapter_for_source(source_hint)
             if hinted.source_name != "scraper":
                 adapter = hinted
 
-    if adapter is not None and adapter.source_name != "scraper":
-        if adapter.source_name == "hackernews":
-            state["error"] = "HackerNews should be handled by adapter.fetch_jobs() instead of the HTML agent route."
+    if adapter.source_name != "scraper":
+        if adapter.source_name in {"hackernews", "cutshort", "unstop"}:
+            state["error"] = f"{adapter.source_name} should be handled by adapter.fetch_jobs() instead of the HTML agent route."
             return "handle_error"
         return "site_specific_parse"
     return "try_json_ld"
@@ -207,6 +192,7 @@ def job_item_to_dict(job: JobItem) -> dict[str, Any]:
         "posted_at": job.posted_at,
         "salary_min": job.salary_min,
         "salary_max": job.salary_max,
+        "experience_required": job.experience_required,
     }
 
 
@@ -221,6 +207,7 @@ def job_item_from_dict(payload: dict[str, Any]) -> JobItem:
         posted_at=clean_text(payload.get("posted_at")) or None,
         salary_min=payload.get("salary_min"),
         salary_max=payload.get("salary_max"),
+        experience_required=clean_text(payload.get("experience_required")) or None,
     )
 
 
@@ -265,6 +252,7 @@ async def run_job_scraper_agent(
         "raw_html": None,
         "parsed_jobs": [],
         "saved_count": 0,
+        "new_job_ids": [],
         "task_id": task_id,
         "user_id": user_id,
         "error": None,
