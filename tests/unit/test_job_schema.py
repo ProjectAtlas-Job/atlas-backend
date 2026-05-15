@@ -2,7 +2,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from app.schemas.job import JobListParams, JobMatchListRead
+from app.schemas.job import JobListParams, JobMatchListRead, UserJobSaveCreate, UserJobSaveUpdate
 
 
 class JobListParamsSchemaTests(unittest.TestCase):
@@ -51,3 +51,13 @@ class JobListParamsSchemaTests(unittest.TestCase):
         self.assertTrue(payload.cached)
         self.assertEqual(payload.items[0].job.title, "Backend Engineer")
         self.assertEqual(payload.items[0].match_score, 0.8123)
+
+    def test_job_save_create_normalizes_blank_notes_to_none(self) -> None:
+        payload = UserJobSaveCreate(status="saved", notes="   ")
+
+        self.assertEqual(payload.status, "saved")
+        self.assertIsNone(payload.notes)
+
+    def test_job_save_update_rejects_unknown_status(self) -> None:
+        with self.assertRaises(ValidationError):
+            UserJobSaveUpdate(status="archived", notes=None)

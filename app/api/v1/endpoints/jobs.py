@@ -4,13 +4,25 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from redis.asyncio import Redis
-from sqlalchemy import Date, Text, cast, func, or_, select
+from sqlalchemy import Date, Text, cast, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_arq_pool, get_current_active_user, get_db, get_redis
 from app.db.models.job_posting import JobPosting
 from app.db.models.user import User
-from app.schemas.job import JobListParams, JobListRead, JobMatchListRead, JobMatchRead, JobPostingRead
+from app.db.models.user_job_save import UserJobSave
+from app.schemas.job import (
+    JobListParams,
+    JobListRead,
+    JobMatchListRead,
+    JobMatchRead,
+    JobPostingRead,
+    SavedJobItemRead,
+    SavedJobListRead,
+    UserJobSaveCreate,
+    UserJobSaveRead,
+    UserJobSaveUpdate,
+)
 from app.schemas.scraper import (
     ManualJobSubmissionDuplicateResponse,
     ManualJobSubmissionQueuedResponse,
@@ -27,6 +39,43 @@ from app.services.matching.engine import (
 from app.services.scrapers.service import enqueue_scrape_job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+async def _get_job_or_404(job_id: int, db: AsyncSession) -> JobPosting:
+    result = await db.execute(
+        select(JobPosting).where(
+            JobPosting.id == job_id,
+            JobPosting.is_active.is_(True),
+        )
+    )
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+    return job
+
+
+async def _get_user_save(job_id: int, user_id: int, db: AsyncSession) -> UserJobSave | None:
+    result = await db.execute(
+        select(UserJobSave).where(
+            UserJobSave.job_id == job_id,
+            UserJobSave.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _get_cached_match_score(redis: Redis, user_id: int, job_id: int) -> float | None:
+    cached_payload = await redis.get(make_job_matches_cache_key(user_id))
+    if not cached_payload:
+        return None
+
+    payload = json.loads(cached_payload)
+    for item in payload.get("items", []):
+        job = item.get("job") if isinstance(item, dict) else None
+        if isinstance(job, dict) and job.get("id") == job_id:
+            score = item.get("match_score")
+            return float(score) if isinstance(score, (int, float)) else None
+    return None
 
 
 def _apply_job_filters(statement, params: JobListParams, *, dialect_name: str):
@@ -156,6 +205,95 @@ async def list_job_matches(
     )
 
 
+@router.get("/saved", response_model=SavedJobListRead)
+async def list_saved_jobs(
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> SavedJobListRead:
+    statement = (
+        select(UserJobSave, JobPosting)
+        .join(JobPosting, JobPosting.id == UserJobSave.job_id)
+        .where(UserJobSave.user_id == current_user.id)
+        .order_by(UserJobSave.created_at.desc(), UserJobSave.id.desc())
+    )
+
+    if status_filter is None:
+        statement = statement.where(UserJobSave.status != "dismissed")
+    else:
+        statement = statement.where(UserJobSave.status == status_filter)
+
+    rows = (await db.execute(statement)).all()
+    return SavedJobListRead(
+        items=[
+            SavedJobItemRead(
+                save=UserJobSaveRead.model_validate(row.UserJobSave),
+                job=JobPostingRead.model_validate(row.JobPosting),
+            )
+            for row in rows
+        ]
+    )
+
+
+@router.post("/{job_id}/save", response_model=UserJobSaveRead, status_code=status.HTTP_201_CREATED)
+async def create_job_save(
+    job_id: int,
+    payload: UserJobSaveCreate,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    current_user: User = Depends(get_current_active_user),
+) -> UserJobSaveRead:
+    await _get_job_or_404(job_id, db)
+    existing = await _get_user_save(job_id, current_user.id, db)
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already saved. Use PUT to update.")
+
+    save = UserJobSave(
+        user_id=current_user.id,
+        job_id=job_id,
+        status=payload.status,
+        notes=payload.notes,
+        match_score=await _get_cached_match_score(redis, current_user.id, job_id),
+    )
+    db.add(save)
+    await db.commit()
+    await db.refresh(save)
+    return UserJobSaveRead.model_validate(save)
+
+
+@router.put("/{job_id}/save", response_model=UserJobSaveRead)
+async def update_job_save(
+    job_id: int,
+    payload: UserJobSaveUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> UserJobSaveRead:
+    save = await _get_user_save(job_id, current_user.id, db)
+    if save is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Saved job not found.")
+
+    save.status = payload.status
+    save.notes = payload.notes
+    await db.commit()
+    await db.refresh(save)
+    return UserJobSaveRead.model_validate(save)
+
+
+@router.delete("/{job_id}/save", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_job_save(
+    job_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Response:
+    save = await _get_user_save(job_id, current_user.id, db)
+    if save is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Saved job not found.")
+
+    await db.execute(delete(UserJobSave).where(UserJobSave.id == save.id))
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post(
     "/manual",
     response_model=ManualJobSubmissionQueuedResponse | ManualJobSubmissionDuplicateResponse,
@@ -199,14 +337,5 @@ async def read_job(
 ) -> JobPostingRead:
     del current_user
 
-    result = await db.execute(
-        select(JobPosting).where(
-            JobPosting.id == job_id,
-            JobPosting.is_active.is_(True),
-        )
-    )
-    job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
-
+    job = await _get_job_or_404(job_id, db)
     return JobPostingRead.model_validate(job)

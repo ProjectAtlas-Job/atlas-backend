@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -45,6 +46,53 @@ class JobMatchListRead(BaseModel):
     items: list[JobMatchRead]
     cached: bool
     generated_at: datetime
+
+
+class UserJobSaveCreate(BaseModel):
+    status: Literal["saved", "dismissed"]
+    notes: str | None = None
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def normalize_notes(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.strip().split())
+        return normalized or None
+
+
+class UserJobSaveUpdate(BaseModel):
+    status: Literal["saved", "dismissed", "applied"]
+    notes: str | None = None
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def normalize_notes(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.strip().split())
+        return normalized or None
+
+
+class UserJobSaveRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    job_id: int
+    status: str
+    match_score: float | None
+    notes: str | None
+    created_at: datetime
+
+
+class SavedJobItemRead(BaseModel):
+    save: UserJobSaveRead
+    job: JobPostingRead
+
+
+class SavedJobListRead(BaseModel):
+    items: list[SavedJobItemRead]
 
 
 class JobListParams(BaseModel):
