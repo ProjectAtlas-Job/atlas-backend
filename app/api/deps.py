@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from jose import JWTError, jwt
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +19,10 @@ async def get_db():
 
 def get_arq_pool(request: Request):
     return request.app.state.arq_pool
+
+
+def get_redis(request: Request) -> Redis:
+    return request.app.state.redis
 
 
 async def get_current_user(

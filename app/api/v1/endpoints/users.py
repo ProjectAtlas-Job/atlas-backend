@@ -1,12 +1,14 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_active_user, get_db
+from app.api.deps import get_arq_pool, get_current_active_user, get_db, get_redis
 from app.db.models.user import User
 from app.schemas.auth import UserRead
 from app.schemas.user import GitHubScanRead, ProfileCompletenessRead, UserUpdate
+from app.services.matching.engine import make_job_matches_cache_key
 from app.services.profile.completeness import get_profile_completeness, refresh_profile_completeness
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -21,6 +23,8 @@ async def read_me(current_user: User = Depends(get_current_active_user)) -> User
 async def update_me(
     payload: UserUpdate,
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    arq_pool=Depends(get_arq_pool),
     current_user: User = Depends(get_current_active_user),
 ) -> UserRead:
     user = current_user
@@ -37,6 +41,8 @@ async def update_me(
     user, _, _ = await refresh_profile_completeness(db, user_id=user.id)
 
     await db.commit()
+    await redis.delete(make_job_matches_cache_key(current_user.id))
+    await arq_pool.enqueue_job("refresh_job_matches", user_id=current_user.id)
     await db.refresh(user)
     return UserRead.model_validate(user)
 

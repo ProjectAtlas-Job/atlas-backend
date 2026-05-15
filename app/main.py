@@ -4,6 +4,7 @@ from arq import create_pool
 from arq.connections import RedisSettings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import redis.asyncio as aioredis
 from slowapi.errors import RateLimitExceeded
 from slowapi.extension import _rate_limit_exceeded_handler
 from slowapi.middleware import SlowAPIMiddleware
@@ -23,6 +24,7 @@ openapi_url = None if settings.ENVIRONMENT == "production" else "/openapi.json"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+    app.state.redis = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     bind_arq_pool(app.state.arq_pool)
     if not scheduler.running:
         scheduler.start()
@@ -34,6 +36,7 @@ async def lifespan(app: FastAPI):
         if scheduler.running:
             scheduler.shutdown()
         clear_arq_pool()
+        await app.state.redis.aclose()
         await app.state.arq_pool.close()
 
 

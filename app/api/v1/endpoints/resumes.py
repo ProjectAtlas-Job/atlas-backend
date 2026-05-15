@@ -3,13 +3,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from loguru import logger
+from redis.asyncio import Redis
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_arq_pool, get_current_active_user, get_db
+from app.api.deps import get_arq_pool, get_current_active_user, get_db, get_redis
 from app.db.models.resume import Resume
 from app.db.models.user import User
 from app.schemas.resume import ResumeRead, ResumeStatusRead, ResumeUpdate
+from app.services.matching.engine import make_job_matches_cache_key
 from app.services.profile.completeness import refresh_profile_completeness
 from app.services.resume.service import (
     enqueue_resume_processing,
@@ -42,6 +44,7 @@ async def upload_resume(
     label: Annotated[str | None, Form()] = None,
     db: AsyncSession = Depends(get_db),
     arq_pool=Depends(get_arq_pool),
+    redis: Redis = Depends(get_redis),
     current_user: User = Depends(get_current_active_user),
 ) -> ResumeRead:
     file_bytes = await resume_file.read()
@@ -89,6 +92,9 @@ async def upload_resume(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Resume was uploaded but processing could not be started.",
         )
+
+    await redis.delete(make_job_matches_cache_key(current_user.id))
+    await arq_pool.enqueue_job("refresh_job_matches", user_id=current_user.id)
 
     return ResumeRead.model_validate(resume)
 

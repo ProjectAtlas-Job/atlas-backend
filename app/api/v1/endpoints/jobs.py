@@ -1,18 +1,28 @@
+import json
 from datetime import UTC, date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from redis.asyncio import Redis
 from sqlalchemy import Date, Text, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_arq_pool, get_current_active_user, get_db
+from app.api.deps import get_arq_pool, get_current_active_user, get_db, get_redis
 from app.db.models.job_posting import JobPosting
 from app.db.models.user import User
-from app.schemas.job import JobListParams, JobListRead, JobPostingRead
+from app.schemas.job import JobListParams, JobListRead, JobMatchListRead, JobMatchRead, JobPostingRead
 from app.schemas.scraper import (
     ManualJobSubmissionDuplicateResponse,
     ManualJobSubmissionQueuedResponse,
     ManualJobSubmissionRequest,
+)
+from app.services.matching.engine import (
+    CACHE_TTL_SECONDS,
+    get_job_matches,
+    get_match_threshold,
+    make_job_matches_cache_key,
+    serialize_match,
+    serialize_cached_matches_payload,
 )
 from app.services.scrapers.service import enqueue_scrape_job
 
@@ -110,6 +120,39 @@ async def list_jobs(
         items=[JobPostingRead.model_validate(job) for job in jobs],
         skip=params.skip,
         limit=params.limit,
+    )
+
+
+@router.get("/matches", response_model=JobMatchListRead)
+async def list_job_matches(
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    current_user: User = Depends(get_current_active_user),
+) -> JobMatchListRead:
+    threshold = await get_match_threshold(current_user.id, db)
+    cache_key = make_job_matches_cache_key(current_user.id)
+    cached_payload = await redis.get(cache_key)
+    if cached_payload:
+        payload = json.loads(cached_payload)
+        return JobMatchListRead(
+            items=[JobMatchRead.model_validate(item) for item in payload["items"]],
+            cached=True,
+            generated_at=payload["generated_at"],
+        )
+
+    results = await get_job_matches(current_user.id, db, threshold=threshold)
+    generated_at = datetime.now(UTC)
+    if results:
+        await redis.set(
+            cache_key,
+            serialize_cached_matches_payload(results, generated_at=generated_at),
+            ex=CACHE_TTL_SECONDS,
+        )
+
+    return JobMatchListRead(
+        items=[JobMatchRead.model_validate(serialize_match(result)) for result in results],
+        cached=False,
+        generated_at=generated_at,
     )
 
 

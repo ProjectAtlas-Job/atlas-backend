@@ -36,6 +36,17 @@ class JobListRead(BaseModel):
     limit: int
 
 
+class JobMatchRead(BaseModel):
+    job: JobPostingRead
+    match_score: float
+
+
+class JobMatchListRead(BaseModel):
+    items: list[JobMatchRead]
+    cached: bool
+    generated_at: datetime
+
+
 class JobListParams(BaseModel):
     source: str | None = None
     work_type: str | None = None
