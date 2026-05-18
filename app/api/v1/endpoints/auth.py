@@ -3,7 +3,7 @@ import secrets
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from html import escape
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from uuid import uuid4
 
 import httpx
@@ -50,15 +50,21 @@ def _refresh_token_ttl_seconds() -> int:
     return settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
 
 
+def _cookie_secure() -> bool:
+    frontend_scheme = urlparse(settings.FRONTEND_URL).scheme.lower()
+    return frontend_scheme == "https" or settings.ENVIRONMENT in {"production", "staging"}
+
+
 def _set_refresh_cookie(response: Response, refresh_token: str, max_age: int) -> None:
     response.set_cookie(
         key=REFRESH_TOKEN_COOKIE_NAME,
         value=refresh_token,
         httponly=True,
-        secure=True,
-        samesite="strict",
+        secure=_cookie_secure(),
+        samesite="lax",
         domain=settings.COOKIE_DOMAIN,
         max_age=max_age,
+        path="/",
     )
 
 
@@ -260,19 +266,17 @@ async def login(
 async def logout(
     response: Response,
     request: Request,
-    current_user: User = Depends(get_current_active_user),
 ) -> Response:
     refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE_NAME)
     if refresh_token:
         await redis_client.delete(f"refresh:{refresh_token}")
-    response.set_cookie(
+    response.delete_cookie(
         key=REFRESH_TOKEN_COOKIE_NAME,
-        value="",
         httponly=True,
-        secure=True,
-        samesite="strict",
+        secure=_cookie_secure(),
+        samesite="lax",
         domain=settings.COOKIE_DOMAIN,
-        max_age=0,
+        path="/",
     )
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
