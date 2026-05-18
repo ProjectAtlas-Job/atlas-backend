@@ -16,10 +16,9 @@ async def refresh_job_matches(ctx: dict[str, object], user_id: int) -> dict[str,
     async with AsyncSessionLocal() as db:
         threshold = await get_match_threshold(user_id, db)
         results = await get_job_matches(user_id, db, threshold=threshold)
-        if results:
-            await redis.set(
-                make_job_matches_cache_key(user_id),
-                serialize_cached_matches_payload(results),
-                ex=CACHE_TTL_SECONDS,
-            )
+        await redis.set(
+            make_job_matches_cache_key(user_id),
+            serialize_cached_matches_payload(results),
+            ex=CACHE_TTL_SECONDS,
+        )
     return {"user_id": user_id, "count": len(results)}

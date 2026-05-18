@@ -108,6 +108,33 @@ class MatchingEngineTests(unittest.TestCase):
         cached_payload = json.loads(fake_redis.calls[0]["value"])
         self.assertEqual(cached_payload["items"][0]["job"]["title"], "Platform Engineer")
 
+    def test_refresh_job_matches_caches_empty_results(self) -> None:
+        fake_redis = FakeRedis()
+
+        async def fake_get_match_threshold(user_id: int, db) -> float:
+            self.assertEqual(user_id, 99)
+            return 0.65
+
+        async def fake_get_job_matches(user_id: int, db, threshold: float = 0.65, limit: int = 50):
+            self.assertEqual(user_id, 99)
+            self.assertEqual(threshold, 0.65)
+            self.assertEqual(limit, 50)
+            return []
+
+        with (
+            patch("app.worker.tasks.matching_tasks.AsyncSessionLocal", lambda: FakeSession()),
+            patch("app.worker.tasks.matching_tasks.get_match_threshold", fake_get_match_threshold),
+            patch("app.worker.tasks.matching_tasks.get_job_matches", fake_get_job_matches),
+        ):
+            result = asyncio.run(refresh_job_matches({"redis": fake_redis}, user_id=99))
+
+        self.assertEqual(result, {"user_id": 99, "count": 0})
+        self.assertEqual(fake_redis.calls[0]["key"], "user:99:job_matches")
+        self.assertEqual(fake_redis.calls[0]["ex"], 86400)
+        cached_payload = json.loads(fake_redis.calls[0]["value"])
+        self.assertEqual(cached_payload["items"], [])
+        self.assertTrue(cached_payload["generated_at"])
+
 
 if __name__ == "__main__":
     unittest.main()

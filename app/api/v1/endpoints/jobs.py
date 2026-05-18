@@ -191,12 +191,11 @@ async def list_job_matches(
 
     results = await get_job_matches(current_user.id, db, threshold=threshold)
     generated_at = datetime.now(UTC)
-    if results:
-        await redis.set(
-            cache_key,
-            serialize_cached_matches_payload(results, generated_at=generated_at),
-            ex=CACHE_TTL_SECONDS,
-        )
+    await redis.set(
+        cache_key,
+        serialize_cached_matches_payload(results, generated_at=generated_at),
+        ex=CACHE_TTL_SECONDS,
+    )
 
     return JobMatchListRead(
         items=[JobMatchRead.model_validate(serialize_match(result)) for result in results],
